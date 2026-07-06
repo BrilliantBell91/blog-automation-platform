@@ -48,7 +48,7 @@ Notion을 단일 정보원(Single Source of Truth)으로 하는 블로그 콘텐
 1. **저장소 클론**
    ```bash
    git clone <repository-url>
-   cd notion-cms-project
+   cd blog-automation-platform
    ```
 
 2. **의존성 설치**

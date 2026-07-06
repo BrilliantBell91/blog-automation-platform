@@ -8,22 +8,82 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  name      String?
-  email     String   @unique
-  password  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  posts     Post[]
+  id                String    @id @default(cuid())
+  name              String?
+  email             String    @unique
+  passwordHash      String?
+  naverStyleGuide   String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  posts             Post[]
+  accounts          Account[]
+  sessions          Session[]
+  reviewedDrafts    Draft[]   @relation("ReviewedBy")
+}
+
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?
+  access_token       String?
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
 }
 
 model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  author    User     @relation(fields: [authorId], references: [id])
-  authorId  String
+  id                  String   @id @default(cuid())
+  notionId            String   @unique
+  title               String
+  content             String?
+  excerpt             String?
+  category            String
+  tags                String   @default("") // JSON 직렬화 또는 콤마 구분 문자열
+  imageUrl            String?
+  status              String   @default("초안") // '초안' | '발행됨' | '보관됨'
+  publishedAt         DateTime?
+  naverDraftStatus    String   @default("미생성") // '미생성' | '생성됨' | '게시완료'
+  naverPostUrl        String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  author              User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  authorId            String?
+  draft               Draft?   @relation("PostDraft")
+}
+
+model Draft {
+  id                String   @id @default(cuid())
+  postId            String   @unique
+  post              Post     @relation("PostDraft", fields: [postId], references: [id], onDelete: Cascade)
+  generatedContent  String
+  status            String   @default("미생성") // '미생성' | '생성됨' | '게시완료'
+  reviewedById      String?
+  reviewedBy        User?    @relation("ReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
