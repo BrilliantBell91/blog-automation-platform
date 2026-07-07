@@ -58,5 +58,5 @@ next-env.d.ts
 !.claude/commands/
 !.claude/agents/
 
-# shrimp-task-manager MCP 로컬 데이터
-/shrimp_data/
+# shrimp-task-manager MCP 로컬 데이터 (버전 관리 포함)
+# /shrimp_data/
