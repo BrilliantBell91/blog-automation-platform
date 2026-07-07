@@ -9,9 +9,9 @@ export default function PublicLayout({
     <div className="flex min-h-screen flex-col">
       <Navigation />
       <main className="flex-1">{children}</main>
-      <footer className="border-t py-6 text-center text-sm text-muted-foreground">
-        {/* TODO Task 004: 실제 푸터 콘텐츠 */}
-        <p>&copy; 2025 Notion CMS 블로그 자동화 플랫폼</p>
+      <footer className="border-t py-8 text-center text-sm text-muted-foreground">
+        <p>맛집 · 육아 · 결혼 이야기를 기록하는 블로그</p>
+        <p className="mt-1">&copy; {new Date().getFullYear()} Notion CMS 블로그 자동화 플랫폼</p>
       </footer>
     </div>
   )
