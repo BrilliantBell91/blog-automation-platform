@@ -1,0 +1,268 @@
+"use client"
+
+import { useState } from "react"
+import { Loader2, MoreHorizontal, Eye } from "lucide-react"
+import { toast } from "sonner"
+import { Post, Draft, DraftStatus } from "@/types"
+import { generateMockDraft } from "@/lib/mockData"
+import { formatDate } from "@/lib/formatters"
+import { DRAFT_STATUS } from "@/constants"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs"
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { DraftPreview } from "@/components/DraftPreview"
+
+interface DraftDashboardProps {
+  initialItems: Array<{ post: Post; draft: Draft | null }>
+}
+
+type FilterType = "all" | DraftStatus
+
+function getDraftStatusBadgeVariant(
+  status: DraftStatus | null
+): "default" | "secondary" | "outline" {
+  if (status === "생성됨") return "default"
+  if (status === "게시완료") return "secondary"
+  return "outline"
+}
+
+export function DraftDashboard({ initialItems }: DraftDashboardProps) {
+  const [items, setItems] = useState(initialItems)
+  const [activeFilter, setActiveFilter] = useState<FilterType>("all")
+  const [previewItem, setPreviewItem] = useState<{
+    post: Post
+    draft: Draft | null
+  } | null>(null)
+  const [generatingIds, setGeneratingIds] = useState<Set<string>>(new Set())
+
+  // 상태별 필터링
+  const filteredItems =
+    activeFilter === "all"
+      ? items
+      : items.filter((item) => {
+          if (activeFilter === "미생성") return item.draft === null
+          return item.draft?.status === activeFilter
+        })
+
+  // 각 상태별 개수 계산
+  const statusCounts = {
+    all: items.length,
+    미생성: items.filter((i) => i.draft === null).length,
+    생성됨: items.filter((i) => i.draft?.status === "생성됨").length,
+    게시완료: items.filter((i) => i.draft?.status === "게시완료").length,
+  }
+
+  // 초안 생성 목업
+  function handleGenerateDraft(postId: string) {
+    const post = items.find((i) => i.post.id === postId)?.post
+    if (!post) return
+
+    setGeneratingIds((prev) => new Set(prev).add(postId))
+
+    setTimeout(() => {
+      setItems((prev) =>
+        prev.map((item) =>
+          item.post.id === postId
+            ? { ...item, draft: generateMockDraft(postId) }
+            : item
+        )
+      )
+      setGeneratingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(postId)
+        return next
+      })
+      toast.success(`"${post.title}" 초안이 생성되었습니다`)
+    }, 900)
+  }
+
+  // 상태 변경
+  function handleStatusChange(postId: string, status: DraftStatus) {
+    setItems((prev) =>
+      prev.map((item) => {
+        if (item.post.id !== postId) return item
+        if (status === "미생성") return { ...item, draft: null }
+        if (!item.draft) return item
+        return {
+          ...item,
+          draft: { ...item.draft, status, updatedAt: new Date() },
+        }
+      })
+    )
+    toast.success("상태가 변경되었습니다")
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* 필터 탭 */}
+      <Tabs
+        value={activeFilter}
+        onValueChange={(val) => setActiveFilter(val as FilterType)}
+      >
+        <TabsList aria-label="초안 상태 필터" className="h-11">
+          <TabsTrigger value="all" className="h-11">
+            전체 ({statusCounts.all})
+          </TabsTrigger>
+          <TabsTrigger value="미생성" className="h-11">
+            미생성 ({statusCounts.미생성})
+          </TabsTrigger>
+          <TabsTrigger value="생성됨" className="h-11">
+            생성됨 ({statusCounts.생성됨})
+          </TabsTrigger>
+          <TabsTrigger value="게시완료" className="h-11">
+            게시완료 ({statusCounts.게시완료})
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {/* 목록 테이블 */}
+      <div className="rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>포스트명</TableHead>
+              <TableHead className="hidden sm:table-cell">작성일</TableHead>
+              <TableHead>상태</TableHead>
+              <TableHead className="hidden md:table-cell">수정일</TableHead>
+              <TableHead className="text-right">작업</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredItems.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center py-8">
+                  <span className="text-sm text-muted-foreground">
+                    {activeFilter === "all"
+                      ? "항목이 없습니다."
+                      : `${activeFilter} 상태의 항목이 없습니다.`}
+                  </span>
+                </TableCell>
+              </TableRow>
+            ) : (
+              filteredItems.map(({ post, draft }) => (
+                <TableRow key={post.id}>
+                  <TableCell className="font-medium">
+                    {post.title}
+                  </TableCell>
+                  <TableCell className="hidden sm:table-cell text-sm text-muted-foreground">
+                    {formatDate(post.createdAt)}
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      variant={getDraftStatusBadgeVariant(draft?.status ?? null)}
+                    >
+                      {draft?.status ?? "미생성"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
+                    {formatDate(draft?.updatedAt ?? post.updatedAt)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {draft === null ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-9"
+                        onClick={() => handleGenerateDraft(post.id)}
+                        disabled={generatingIds.has(post.id)}
+                      >
+                        {generatingIds.has(post.id) ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            생성 중
+                          </>
+                        ) : (
+                          "초안 생성"
+                        )}
+                      </Button>
+                    ) : (
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-9 w-9"
+                          aria-label="초안 미리보기"
+                          onClick={() => setPreviewItem({ post, draft })}
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-9 w-9"
+                              aria-label="초안 상태 변경"
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {Object.keys(DRAFT_STATUS).map((status) => (
+                              <DropdownMenuItem
+                                key={status}
+                                onClick={() =>
+                                  handleStatusChange(
+                                    post.id,
+                                    status as DraftStatus
+                                  )
+                                }
+                              >
+                                {status}
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* 미리보기 Sheet */}
+      <Sheet
+        open={previewItem !== null}
+        onOpenChange={(open) => {
+          if (!open) setPreviewItem(null)
+        }}
+      >
+        <SheetContent className="w-full sm:max-w-xl">
+          <SheetHeader>
+            <SheetTitle>초안 미리보기</SheetTitle>
+          </SheetHeader>
+          <div className="mt-6">
+            <DraftPreview draft={previewItem?.draft ?? null} />
+          </div>
+        </SheetContent>
+      </Sheet>
+    </div>
+  )
+}
