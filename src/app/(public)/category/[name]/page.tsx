@@ -1,3 +1,4 @@
+import { Inbox } from "lucide-react"
 import { generateMockPosts } from "@/lib/mockData"
 import { PostList } from "@/components/PostList"
 import { CategoryFilter } from "@/components/CategoryFilter"
@@ -27,19 +28,29 @@ export default async function CategoryPage({ params, searchParams }: CategoryPag
 
   return (
     <div className="mx-auto max-w-5xl space-y-8 p-4 sm:p-8">
-      <div className="space-y-2">
+      {/* 페이지 소개 영역을 header로 묶어 시맨틱을 명확히 함 */}
+      <header className="space-y-2">
         <h1 className="text-2xl font-bold">{decoded}</h1>
         <p className="text-muted-foreground">{filtered.length}개의 글</p>
-      </div>
+      </header>
 
+      {/* activeCategory가 decoded와 일치해야 현재 카테고리 칩에 aria-current="page"가 붙는다 */}
       <CategoryFilter categories={[...DEFAULT_CATEGORIES]} activeCategory={decoded} />
 
       {pagedPosts.length > 0 ? (
-        <PostList posts={pagedPosts} />
+        <section aria-labelledby="category-posts-heading">
+          <h2 id="category-posts-heading" className="sr-only">
+            {decoded} 카테고리 포스트 목록
+          </h2>
+          <PostList posts={pagedPosts} />
+        </section>
       ) : (
-        <p className="py-12 text-center text-muted-foreground">
-          &quot;{decoded}&quot; 카테고리에 글이 없습니다.
-        </p>
+        // 빈 카테고리 상태 — 검색 결과 없음 화면과 동일한 톤으로 안내 + 다음 행동 제안
+        <div className="flex flex-col items-center gap-3 py-16 text-center text-muted-foreground">
+          <Inbox className="h-10 w-10" aria-hidden="true" />
+          <p>&quot;{decoded}&quot; 카테고리에 아직 글이 없습니다.</p>
+          <p className="text-sm">다른 카테고리를 둘러보세요.</p>
+        </div>
       )}
 
       <Pagination

@@ -123,7 +123,11 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
         value={activeFilter}
         onValueChange={(val) => setActiveFilter(val as FilterType)}
       >
-        <TabsList aria-label="초안 상태 필터" className="h-11">
+        {/* 375px 등 좁은 화면에서는 탭이 줄바꿈되도록 flex-wrap 적용, 각 탭은 44px 높이로 터치 타깃 확보 */}
+        <TabsList
+          aria-label="초안 상태 필터"
+          className="h-auto flex-wrap justify-start gap-1"
+        >
           <TabsTrigger value="all" className="h-11">
             전체 ({statusCounts.all})
           </TabsTrigger>
@@ -139,16 +143,22 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
         </TabsList>
       </Tabs>
 
-      {/* 목록 테이블 */}
-      <div className="rounded-lg border">
+      {/* 목록 테이블: 좁은 화면에서 가로 스크롤 가능하도록 overflow-x-auto 적용 */}
+      <div className="overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>포스트명</TableHead>
-              <TableHead className="hidden sm:table-cell">작성일</TableHead>
-              <TableHead>상태</TableHead>
-              <TableHead className="hidden md:table-cell">수정일</TableHead>
-              <TableHead className="text-right">작업</TableHead>
+              <TableHead scope="col">포스트명</TableHead>
+              <TableHead scope="col" className="hidden sm:table-cell">
+                작성일
+              </TableHead>
+              <TableHead scope="col">상태</TableHead>
+              <TableHead scope="col" className="hidden md:table-cell">
+                수정일
+              </TableHead>
+              <TableHead scope="col" className="text-right">
+                작업
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -186,13 +196,17 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-9"
+                        className="h-11"
                         onClick={() => handleGenerateDraft(post.id)}
                         disabled={generatingIds.has(post.id)}
+                        aria-busy={generatingIds.has(post.id)}
                       >
                         {generatingIds.has(post.id) ? (
                           <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            <Loader2
+                              className="mr-2 h-4 w-4 animate-spin"
+                              aria-hidden="true"
+                            />
                             생성 중
                           </>
                         ) : (
@@ -204,21 +218,24 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-9 w-9"
+                          className="h-11 w-11"
                           aria-label="초안 미리보기"
                           onClick={() => setPreviewItem({ post, draft })}
                         >
-                          <Eye className="h-4 w-4" />
+                          <Eye className="h-4 w-4" aria-hidden="true" />
                         </Button>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="h-9 w-9"
+                              className="h-11 w-11"
                               aria-label="초안 상태 변경"
                             >
-                              <MoreHorizontal className="h-4 w-4" />
+                              <MoreHorizontal
+                                className="h-4 w-4"
+                                aria-hidden="true"
+                              />
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
@@ -254,10 +271,11 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
           if (!open) setPreviewItem(null)
         }}
       >
-        <SheetContent className="w-full sm:max-w-xl">
+        <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
           <SheetHeader>
             <SheetTitle>초안 미리보기</SheetTitle>
           </SheetHeader>
+          {/* Sheet 자체를 세로 스크롤 가능하게 하여 모바일 뷰포트에서 콘텐츠가 잘리지 않도록 함 */}
           <div className="mt-6">
             <DraftPreview draft={previewItem?.draft ?? null} />
           </div>

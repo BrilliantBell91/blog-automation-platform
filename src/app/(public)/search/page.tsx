@@ -49,47 +49,55 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-8">
-      <h1 className="text-2xl font-bold">검색</h1>
+      <header>
+        <h1 className="text-2xl font-bold">검색</h1>
+      </header>
+
       <SearchBar defaultValue={query} />
 
-      <div className="flex flex-wrap gap-2">
+      {/* 검색 결과 타입 필터 — 페이지 이동을 수행하는 링크 그룹이므로 nav로 마크업(CategoryFilter와 동일 패턴) */}
+      {/* flex-wrap이 375px 폭에서도 버튼 4개를 자동 줄바꿈하므로 overflow-x-auto는 불필요 */}
+      <nav aria-label="검색 결과 타입 필터" className="flex flex-wrap gap-2">
         {Object.values(SEARCH_TYPES).map((t) => (
           <Link
             key={t}
             href={`/search?q=${encodeURIComponent(query)}&type=${t}`}
-            aria-current={searchType === t ? "true" : undefined}
+            aria-current={searchType === t ? "page" : undefined}
             className={cn(
-              "flex min-h-11 items-center rounded-full border px-4 text-sm",
+              "flex min-h-11 items-center rounded-full border px-4 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               searchType === t ? "bg-primary text-primary-foreground border-transparent" : "hover:bg-accent"
             )}
           >
             {TYPE_LABELS[t]}
           </Link>
         ))}
-      </div>
+      </nav>
 
       {query ? (
-        <>
+        <section aria-labelledby="search-results-heading">
+          <h2 id="search-results-heading" className="sr-only">
+            검색 결과
+          </h2>
           <p className="text-sm text-muted-foreground">
             &quot;{query}&quot; 검색 결과 {matches.length}건
           </p>
           {pagedPosts.length > 0 ? (
-            <>
+            <div className="mt-4 space-y-6">
               <PostList posts={pagedPosts} />
               <Pagination
                 currentPage={currentPage}
                 totalPages={totalPages}
                 basePath={`/search?q=${encodeURIComponent(query)}&type=${searchType}`}
               />
-            </>
+            </div>
           ) : (
             <div className="flex flex-col items-center gap-3 py-16 text-center text-muted-foreground">
-              <SearchX className="h-10 w-10" />
+              <SearchX className="h-10 w-10" aria-hidden="true" />
               <p>검색 결과가 없습니다.</p>
               <p className="text-sm">다른 키워드로 다시 시도해보세요.</p>
             </div>
           )}
-        </>
+        </section>
       ) : (
         <p className="py-12 text-center text-muted-foreground">검색어를 입력해주세요.</p>
       )}

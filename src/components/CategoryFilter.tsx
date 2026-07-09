@@ -15,10 +15,12 @@ export function CategoryFilter({ categories, activeCategory }: CategoryFilterPro
     )
 
   return (
-    <div className="flex flex-wrap gap-2" role="group" aria-label="카테고리 필터">
+    // 카테고리 필터는 페이지 이동을 수행하는 링크 그룹이므로 nav로 마크업
+    // (aria-pressed는 role="button" 요소 전용이라 링크에는 aria-current="page" 사용)
+    <nav className="flex flex-wrap gap-2" aria-label="카테고리 필터">
       <Link
         href="/"
-        aria-pressed={activeCategory === undefined}
+        aria-current={activeCategory === undefined ? "page" : undefined}
         className={chipClass(activeCategory === undefined)}
       >
         전체
@@ -27,12 +29,12 @@ export function CategoryFilter({ categories, activeCategory }: CategoryFilterPro
         <Link
           key={category}
           href={`/category/${encodeUrl(category)}`}
-          aria-pressed={activeCategory === category}
+          aria-current={activeCategory === category ? "page" : undefined}
           className={chipClass(activeCategory === category)}
         >
           {category}
         </Link>
       ))}
-    </div>
+    </nav>
   )
 }

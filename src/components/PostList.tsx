@@ -7,10 +7,13 @@ interface PostListProps {
 
 export function PostList({ posts }: PostListProps) {
   return (
-    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+    // 포스트 목록은 의미상 목록이므로 ul/li로 마크업 (div 남용 방지)
+    <ul className="grid list-none gap-4 md:grid-cols-2 lg:grid-cols-3">
       {posts.map((post) => (
-        <PostCard key={post.id} post={post} />
+        <li key={post.id}>
+          <PostCard post={post} />
+        </li>
       ))}
-    </div>
+    </ul>
   )
 }

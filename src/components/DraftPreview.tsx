@@ -33,20 +33,21 @@ export function DraftPreview({ draft }: DraftPreviewProps) {
 
   return (
     <div className="space-y-4 rounded-lg border p-4">
-      <div className="flex items-center justify-between">
+      {/* 좁은 화면에서 생성 시각과 편집 버튼이 겹치지 않도록 flex-wrap 적용 */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
           생성: {draft.createdAt.toLocaleString("ko-KR")}
         </p>
         <Button
           variant="ghost"
           size="sm"
-          className="h-9 gap-1"
+          className="h-11 gap-1"
           onClick={() => {
             setEditedContent(content)
             setIsEditing((prev) => !prev)
           }}
         >
-          <Pencil className="h-3.5 w-3.5" />
+          <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
           {isEditing ? "편집 완료" : "편집"}
         </Button>
       </div>
@@ -58,18 +59,23 @@ export function DraftPreview({ draft }: DraftPreviewProps) {
           className="min-h-[240px]"
         />
       ) : (
-        <div className="max-h-[60vh] space-y-3 overflow-y-auto text-sm">
+        // 모바일(375x812) 등 뷰포트가 작을 때 잘리지 않도록 60vh -> 50vh로 조정
+        <div className="max-h-[50vh] space-y-3 overflow-y-auto text-sm">
           {paragraphs.map((paragraph, i) => (
-            <div key={i} className="flex items-start justify-between gap-2 rounded-md p-2 hover:bg-accent">
+            <div
+              key={i}
+              className="flex items-center justify-between gap-2 rounded-md p-2 hover:bg-accent"
+            >
               <p className="whitespace-pre-wrap">{paragraph}</p>
+              {/* 시각적 아이콘 크기는 유지하고 버튼 히트 영역만 44px로 확대 */}
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 shrink-0"
+                className="h-11 w-11 shrink-0"
                 aria-label="문단 복사"
                 onClick={() => copyText(paragraph)}
               >
-                <Copy className="h-3.5 w-3.5" />
+                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
             </div>
           ))}
@@ -78,7 +84,7 @@ export function DraftPreview({ draft }: DraftPreviewProps) {
 
       <div className="flex justify-end">
         <Button className="h-11 gap-2" onClick={() => copyText(content)}>
-          <Copy className="h-4 w-4" />
+          <Copy className="h-4 w-4" aria-hidden="true" />
           전체 복사
         </Button>
       </div>
