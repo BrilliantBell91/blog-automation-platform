@@ -6,6 +6,9 @@ export const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID || ''
 // 페이지네이션
 export const POSTS_PER_PAGE = 10
 
+// Task 012: 포스트 상세 페이지의 정적 생성 파라미터 개수 (최신 발행순)
+export const STATIC_PARAMS_POST_LIMIT = 20
+
 // Notion API Rate Limit 설정
 export const NOTION_RATE_LIMIT = {
   MAX_REQUESTS_PER_MINUTE: 30,

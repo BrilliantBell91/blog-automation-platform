@@ -1,10 +1,13 @@
+import { revalidatePath } from "next/cache"
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/auth"
-import { getPostById } from "@/lib/notion"
+import { getCachedPostById } from "@/lib/postsCache"
+import { invalidatePostCache } from "@/lib/postsCache"
 import { upsertLocalPost } from "@/lib/posts"
 import { generateNaverDraft } from "@/lib/llm"
 import { db } from "@/lib/db"
 import type { GenerateDraftResponse } from "@/types/api"
+import type { DraftStatus } from "@/types"
 
 export const dynamic = "force-dynamic"
 
@@ -28,8 +31,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Notion에서 포스트 조회
-    const notionPost = await getPostById(postId)
+    // Task 012: getPostById → getCachedPostById로 교체 (중복 Notion 호출 절감)
+    const notionPost = await getCachedPostById(postId)
     if (!notionPost) {
       return NextResponse.json(
         { error: "Notion에서 포스트를 찾을 수 없습니다." },
@@ -71,10 +74,15 @@ export async function POST(request: NextRequest) {
       data: { naverDraftStatus: "생성됨" },
     })
 
+    // Task 012: 초안 생성 성공 후 해당 포스트 상세 페이지 재검증
+    // ROADMAP "초안 생성 후 해당 포스트 상세 페이지 재검증" 요구 충족
+    revalidatePath(`/posts/${postId}`)
+    invalidatePostCache(postId)
+
     // Prisma 타입을 앱 타입으로 변환
     const draft = {
       ...draftRecord,
-      status: draftRecord.status as any,
+      status: draftRecord.status as DraftStatus,
     }
 
     const response: GenerateDraftResponse = { draft }

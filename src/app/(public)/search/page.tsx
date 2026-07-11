@@ -1,6 +1,6 @@
 import Link from "next/link"
 import { SearchX } from "lucide-react"
-import { generateMockPosts } from "@/lib/mockData"
+import { searchPosts } from "@/lib/notion"
 import { SearchBar } from "@/components/SearchBar"
 import { PostList } from "@/components/PostList"
 import { Pagination } from "@/components/Pagination"
@@ -11,7 +11,8 @@ interface SearchPageProps {
   searchParams: Promise<{ q?: string; type?: string; page?: string }>
 }
 
-const MOCK_POOL_SIZE = 24
+// Task 012: 검색 페이지는 동적 렌더링 유지 (ROADMAP 요구사항)
+export const dynamic = "force-dynamic"
 
 const TYPE_LABELS: Record<SearchType, string> = {
   [SEARCH_TYPES.ALL]: "전체",
@@ -28,21 +29,12 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const currentPage = Math.max(1, Number(page) || 1)
   const query = q.trim()
 
-  const matches = query
-    ? generateMockPosts(MOCK_POOL_SIZE).filter((post) => {
-        const keyword = query.toLowerCase()
-        const matchesTitle = post.title.toLowerCase().includes(keyword)
-        const matchesTag = post.tags.some((tag) => tag.toLowerCase().includes(keyword))
-        const matchesContent = post.content.toLowerCase().includes(keyword)
-        if (searchType === SEARCH_TYPES.TITLE) return matchesTitle
-        if (searchType === SEARCH_TYPES.TAG) return matchesTag
-        if (searchType === SEARCH_TYPES.CONTENT) return matchesContent
-        return matchesTitle || matchesTag || matchesContent
-      })
-    : []
+  // Task 012: mock 데이터 제거, 실데이터 연동
+  // searchPosts는 Notion이 본문검색을 지원하지 않아 전체조회 후 애플리케이션 레벨 필터링 수행
+  const allMatches = query ? await searchPosts(query, searchType) : []
 
-  const totalPages = Math.max(1, Math.ceil(matches.length / POSTS_PER_PAGE))
-  const pagedPosts = matches.slice(
+  const totalPages = Math.max(1, Math.ceil(allMatches.length / POSTS_PER_PAGE))
+  const pagedPosts = allMatches.slice(
     (currentPage - 1) * POSTS_PER_PAGE,
     currentPage * POSTS_PER_PAGE
   )
@@ -79,7 +71,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
             검색 결과
           </h2>
           <p className="text-sm text-muted-foreground">
-            &quot;{query}&quot; 검색 결과 {matches.length}건
+            &quot;{query}&quot; 검색 결과 {allMatches.length}건
           </p>
           {pagedPosts.length > 0 ? (
             <div className="mt-4 space-y-6">

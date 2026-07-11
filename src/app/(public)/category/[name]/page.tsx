@@ -1,9 +1,9 @@
 import { Inbox } from "lucide-react"
-import { generateMockPosts } from "@/lib/mockData"
+import { getCachedPostsByCategory, getCachedCategories } from "@/lib/postsCache"
 import { PostList } from "@/components/PostList"
 import { CategoryFilter } from "@/components/CategoryFilter"
 import { Pagination } from "@/components/Pagination"
-import { DEFAULT_CATEGORIES, POSTS_PER_PAGE } from "@/constants"
+import { POSTS_PER_PAGE } from "@/constants"
 import { encodeUrl } from "@/lib/formatters"
 
 interface CategoryPageProps {
@@ -11,7 +11,15 @@ interface CategoryPageProps {
   searchParams: Promise<{ page?: string }>
 }
 
-const MOCK_POOL_SIZE = 24
+// Task 012: ISR 설정 (searchParams 사용으로 인해 Full Route Cache는 적용되지 않으며,
+// 실질적 캐싱은 postsCache.ts의 TTL 캐싱이 담당함 — Next.js 공식 문서 참고)
+export const revalidate = 3600 // 1시간
+
+// Task 012: 카테고리 페이지의 정적 생성 파라미터 — 모든 카테고리를 미리 생성
+export async function generateStaticParams() {
+  const categories = await getCachedCategories()
+  return categories.map((categoryName) => ({ name: encodeUrl(categoryName) }))
+}
 
 export default async function CategoryPage({ params, searchParams }: CategoryPageProps) {
   const { name } = await params
@@ -19,7 +27,10 @@ export default async function CategoryPage({ params, searchParams }: CategoryPag
   const decoded = decodeURIComponent(name)
   const currentPage = Math.max(1, Number(page) || 1)
 
-  const filtered = generateMockPosts(MOCK_POOL_SIZE).filter((post) => post.category === decoded)
+  // Task 012: mock 데이터 제거, 실데이터 연동
+  const filtered = await getCachedPostsByCategory(decoded)
+  const categories = await getCachedCategories()
+
   const totalPages = Math.max(1, Math.ceil(filtered.length / POSTS_PER_PAGE))
   const pagedPosts = filtered.slice(
     (currentPage - 1) * POSTS_PER_PAGE,
@@ -34,8 +45,8 @@ export default async function CategoryPage({ params, searchParams }: CategoryPag
         <p className="text-muted-foreground">{filtered.length}개의 글</p>
       </header>
 
-      {/* activeCategory가 decoded와 일치해야 현재 카테고리 칩에 aria-current="page"가 붙는다 */}
-      <CategoryFilter categories={[...DEFAULT_CATEGORIES]} activeCategory={decoded} />
+      {/* Task 012: DEFAULT_CATEGORIES 하드코딩 대신 실카테고리 목록으로 교체 */}
+      <CategoryFilter categories={categories} activeCategory={decoded} />
 
       {pagedPosts.length > 0 ? (
         <section aria-labelledby="category-posts-heading">

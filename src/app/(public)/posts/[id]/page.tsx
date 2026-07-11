@@ -1,8 +1,7 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import { ChevronLeft, ChevronRight } from "lucide-react"
-import { getPostById } from "@/lib/notion"
-import { getCachedPublishedPosts } from "@/lib/postsCache"
+import { getCachedPostById, getCachedPublishedPosts } from "@/lib/postsCache"
 import { generateMockPosts } from "@/lib/mockData"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
@@ -10,6 +9,7 @@ import { OptimizedImage } from "@/components/OptimizedImage"
 import { PostBody } from "@/components/PostBody"
 import { ShareButtons } from "@/components/ShareButtons"
 import { formatDate } from "@/lib/formatters"
+import { STATIC_PARAMS_POST_LIMIT } from "@/constants"
 
 interface PostPageProps {
   params: Promise<{ id: string }>
@@ -17,11 +17,23 @@ interface PostPageProps {
 
 const MOCK_POOL_SIZE = 24
 
+// Task 012: ISR 설정 (포스트 상세 페이지는 searchParams를 쓰지 않아 Full Route Cache가 정상 적용됨)
+export const revalidate = 600 // 10분
+
+// Task 012: on-demand ISR 대상 외 경로는 동적 렌더링 (기본값이지만 의도를 명시)
+export const dynamicParams = true
+
+// Task 012: 최신 발행 N개 포스트는 빌드 시 정적 생성
+export async function generateStaticParams() {
+  const posts = await getCachedPublishedPosts()
+  return posts.slice(0, STATIC_PARAMS_POST_LIMIT).map((post) => ({ id: post.notionId }))
+}
+
 export default async function PostPage({ params }: PostPageProps) {
   const { id } = await params
 
-  // 포스트 조회 (Notion 또는 mock)
-  let post = await getPostById(id).catch(() => null)
+  // Task 012: getPostById → getCachedPostById로 교체 (캐시 계층 추가)
+  let post = await getCachedPostById(id).catch(() => null)
   let allPosts
 
   if (!post) {

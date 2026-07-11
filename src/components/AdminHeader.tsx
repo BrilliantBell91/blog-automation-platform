@@ -1,13 +1,44 @@
+"use client"
+
 import Link from "next/link"
-import { Menu } from "lucide-react"
+import { Menu, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { SheetTrigger } from "@/components/ui/sheet"
+import { toast } from "sonner"
+import { useState } from "react"
 
 interface AdminHeaderProps {
   userName?: string
 }
 
 export function AdminHeader({ userName }: AdminHeaderProps) {
+  const [isRevalidating, setIsRevalidating] = useState(false)
+
+  // Task 012: 홈페이지 캐시 재검증 버튼
+  const handleRevalidateHome = async () => {
+    setIsRevalidating(true)
+    try {
+      const res = await fetch("/api/revalidate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "/" }),
+      })
+
+      if (!res.ok) {
+        const error = await res.json()
+        toast.error(error.error || "재검증 실패")
+        return
+      }
+
+      toast.success("홈페이지 캐시가 재검증되었습니다.")
+    } catch (error) {
+      console.error("재검증 요청 실패:", error)
+      toast.error("요청 중 오류가 발생했습니다.")
+    } finally {
+      setIsRevalidating(false)
+    }
+  }
+
   return (
     <header className="flex items-center justify-between gap-3 border-b p-4">
       <div className="flex min-w-0 items-center gap-3">
@@ -33,6 +64,18 @@ export function AdminHeader({ userName }: AdminHeaderProps) {
         <span className="hidden text-sm text-muted-foreground sm:inline">초안 대시보드</span>
       </div>
       <div className="flex shrink-0 items-center gap-3">
+        {/* Task 012: 홈페이지 캐시 재검증 버튼 */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-11"
+          onClick={handleRevalidateHome}
+          disabled={isRevalidating}
+          title="홈페이지 캐시 재검증 (최근 Notion 변경 사항 즉시 반영)"
+        >
+          <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
+          {isRevalidating ? "재검증 중..." : "캐시 새로고침"}
+        </Button>
         <span className="hidden text-sm sm:inline">{userName || "게스트"}</span>
         {/* 로그아웃 실동작은 Task 008(NextAuth signOut 연동)에서 구현 예정 */}
         <Button variant="outline" size="sm" className="h-11" disabled title="Task 008에서 구현 예정">
