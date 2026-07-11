@@ -1,4 +1,4 @@
-import { Post, Draft, DraftStatus } from "@/types"
+import { Post, Draft, DraftStatus, NotionBlock } from "@/types"
 
 const MOCK_TITLES = [
   "서울 강남 가성비 맛집 TOP 5",
@@ -34,6 +34,25 @@ export function generateMockPosts(count: number = 10): Post[] {
     const title = cycle > 1 ? `${baseTitle} ${cycle}` : baseTitle
     const postId = `post-${i + 1}`
 
+    const mockBlocks: NotionBlock[] = [
+      {
+        id: `block-${postId}-1`,
+        type: "paragraph",
+        content: `이것은 ${title}에 대한 샘플 콘텐츠입니다. 본문의 첫 번째 단락입니다.`,
+      },
+      {
+        id: `block-${postId}-2`,
+        type: "image",
+        content: `${title} 썸네일`,
+        imageUrl: `https://picsum.photos/seed/post-${i + 1}-body/800/600`,
+      },
+      {
+        id: `block-${postId}-3`,
+        type: "paragraph",
+        content: `${title}의 두 번째 단락입니다. 추가적인 정보와 경험담을 담고 있습니다.`,
+      },
+    ]
+
     posts.push({
       id: postId,
       notionId: `notion-${postId}`,
@@ -50,6 +69,7 @@ export function generateMockPosts(count: number = 10): Post[] {
         i % 2 === 0
           ? `https://blog.naver.com/zmfflsp/${100 + i}`
           : undefined,
+      blocks: mockBlocks,
       createdAt: new Date(Date.now() - (i + 2) * 24 * 60 * 60 * 1000),
       updatedAt: new Date(Date.now() - (i + 1) * 24 * 60 * 60 * 1000),
     })

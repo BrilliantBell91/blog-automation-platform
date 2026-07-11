@@ -1,7 +1,7 @@
-import Image from "next/image"
 import Link from "next/link"
 import { Post } from "@/types"
 import { Badge } from "@/components/ui/badge"
+import { OptimizedImage } from "@/components/OptimizedImage"
 import { formatDate, truncateExcerpt } from "@/lib/formatters"
 
 interface PostCardProps {
@@ -17,11 +17,12 @@ export function PostCard({ post }: PostCardProps) {
       {/* 이미지 유무와 관계없이 항상 표시되는 썸네일 영역 (카테고리 배지 포함) */}
       <div className="relative aspect-video w-full overflow-hidden bg-muted">
         {post.imageUrl ? (
-          <Image
+          <OptimizedImage
             src={post.imageUrl}
             alt={post.title}
-            fill
-            sizes="(min-width: 1024px) 33vw, (min-width: 768px) 50vw, 100vw"
+            variant="thumbnail"
+            blockId={post.thumbnailBlockId}
+            pageId={post.notionId}
             className="object-cover transition-transform group-hover:scale-105"
           />
         ) : (

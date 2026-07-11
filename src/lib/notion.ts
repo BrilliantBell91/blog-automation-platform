@@ -154,12 +154,14 @@ function blocksToExcerpt(blocks: NotionBlock[], maxLength = 120): string {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
 }
 
-function firstImageUrl(blocks: NotionBlock[]): string | undefined {
-  return blocks.find((b) => b.type === "image")?.imageUrl
+function firstImageBlock(blocks: NotionBlock[]): NotionBlock | undefined {
+  return blocks.find((b) => b.type === "image")
 }
 
 async function mapPageToPost(page: PageObjectResponse): Promise<Post> {
   const blocks = await getPageBlocks(page.id)
+  const cover = getCoverImageUrl(page)
+  const fallbackImageBlock = cover ? undefined : firstImageBlock(blocks)
 
   return {
     id: page.id,
@@ -169,11 +171,13 @@ async function mapPageToPost(page: PageObjectResponse): Promise<Post> {
     excerpt: blocksToExcerpt(blocks),
     category: getSelect(page, "Category"),
     tags: getTags(page, "Tags"),
-    imageUrl: getCoverImageUrl(page) ?? firstImageUrl(blocks),
+    imageUrl: cover ?? fallbackImageBlock?.imageUrl,
     status: (getSelect(page, "Status") || "초안") as Post["status"],
     publishedAt: getDate(page, "Published"),
     naverDraftStatus: (getSelect(page, "NaverDraftStatus") || "미생성") as Post["naverDraftStatus"],
     naverPostUrl: getUrl(page, "NaverPostUrl"),
+    blocks,
+    thumbnailBlockId: fallbackImageBlock?.id,
     createdAt: new Date(page.created_time),
     updatedAt: new Date(page.last_edited_time),
   }
@@ -266,7 +270,7 @@ export async function getCategories(): Promise<string[]> {
 }
 
 /**
- * 만료된 Notion 이미지 URL 재조회
+ * 만료된 Notion 이미지 URL 재조회 (블록 기반)
  */
 export async function refreshImageUrl(blockId: string): Promise<string> {
   const block = await withRetry(() => notion.blocks.retrieve({ block_id: blockId }))
@@ -274,4 +278,15 @@ export async function refreshImageUrl(blockId: string): Promise<string> {
     throw new Error("이미지 블록이 아닙니다")
   }
   return block.image.type === "external" ? block.image.external.url : block.image.file.url
+}
+
+/**
+ * 만료된 커버 이미지 URL 재조회 (페이지 기반)
+ */
+export async function refreshCoverImageUrl(pageId: string): Promise<string | undefined> {
+  const page = await withRetry(() => notion.pages.retrieve({ page_id: pageId }))
+  if (!isFullPage(page)) {
+    throw new Error("페이지 정보를 가져올 수 없습니다")
+  }
+  return getCoverImageUrl(page)
 }

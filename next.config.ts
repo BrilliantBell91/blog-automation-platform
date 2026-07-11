@@ -22,6 +22,9 @@ const nextConfig: NextConfig = {
         hostname: "www.notion.so",
       },
     ],
+    formats: ["image/avif", "image/webp"],
+    qualities: [75, 85],
+    minimumCacheTTL: 3600,
   },
 };
 

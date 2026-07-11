@@ -38,6 +38,8 @@ export interface Post {
   publishedAt?: Date
   naverDraftStatus: DraftStatus
   naverPostUrl?: string
+  blocks?: NotionBlock[] // 본문 렌더링용 (상세 페이지에서 사용)
+  thumbnailBlockId?: string // imageUrl이 "본문 첫 이미지 폴백"일 때만 채워짐 (재조회용)
   createdAt: Date
   updatedAt: Date
   authorId?: string
