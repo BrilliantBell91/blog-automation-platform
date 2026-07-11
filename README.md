@@ -145,9 +145,72 @@ npm run type-check
 # 린트 검사
 npm run lint
 
+# 단위 테스트 실행
+npm run test
+
+# 단위 테스트 감시 모드
+npm run test:watch
+
+# E2E 테스트 실행
+npm run test:e2e
+
 # Prisma 마이그레이션
 npx prisma migrate dev
 npx prisma studio  # DB 관리자 UI
+```
+
+## 🚀 Vercel 배포 가이드
+
+### 환경 변수 설정
+
+Vercel 대시보드의 프로젝트 설정 → Environment Variables에서 다음 값들을 설정하세요:
+
+| 변수명 | 설명 | 필수 |
+|--------|------|------|
+| `DATABASE_URL` | SQLite 파일 경로 (로컬: `file:./dev.db`) | ✅ |
+| `AUTH_SECRET` | NextAuth 토큰 서명용 비밀키 (openssl rand -base64 32) | ✅ |
+| `AUTH_URL` | 배포 URL (예: https://your-domain.vercel.app) | ✅ |
+| `NOTION_API_KEY` | Notion Integration Token | ✅ |
+| `NOTION_DATABASE_ID` | Notion 데이터베이스 ID | ✅ |
+| `ADMIN_EMAIL` | 관리자 로그인 이메일 | ✅ |
+| `ADMIN_PASSWORD` | 관리자 로그인 비밀번호 (bcrypt로 해시됨) | ✅ |
+| `LLM_API_KEY` | Claude API 키 또는 OpenAI API 키 | ✅ |
+| `LLM_PROVIDER` | 사용할 LLM 제공자 (현재 미사용, 향후 지원 예정) | ❌ |
+| `REVALIDATE_SECRET` | ISR 재검증 webhook 토큰 (선택사항) | ❌ |
+
+### ⚠️ SQLite 프로덕션 한계
+
+**중요**: Vercel 서버리스 환경(함수형 컴퓨팅)에서는 파일시스템이 요청마다 초기화되는 임시 환경이므로, 파일 기반 SQLite 데이터베이스는 쓰기 작업이 유지되지 않습니다.
+
+**프로덕션 배포 전 필수 작업:**
+1. Turso (libSQL), Neon, Planetscale 등 **호스팅 데이터베이스로 마이그레이션** 필요
+2. Prisma datasource 설정 변경 (`prisma/schema.prisma`):
+   ```prisma
+   datasource db {
+     provider = "mysql" // 또는 "postgresql" (Turso는 libsql)
+     url      = env("DATABASE_URL")
+   }
+   ```
+3. 새 DB로 마이그레이션 실행 (`npx prisma migrate deploy`)
+
+현재 상태는 **로컬 개발/테스트 전용**입니다. 실제 배포는 위 단계를 반드시 완료해야 합니다.
+
+### 배포 프로세스
+
+1. GitHub에 코드 푸시
+2. Vercel 대시보드 또는 GitHub 통합을 통한 자동 배포
+3. 환경 변수 설정 확인
+4. 배포 완료 후 `/admin/drafts`에서 관리 가능
+
+### 테스트
+
+배포 전 로컬에서 검증:
+```bash
+npm run lint        # 린트 에러 확인
+npm run type-check  # 타입 에러 확인
+npm run build       # 프로덕션 빌드
+npm run test        # 단위 테스트
+npm run test:e2e    # E2E 테스트 (환경변수 필수)
 ```
 
 ## 📚 문서

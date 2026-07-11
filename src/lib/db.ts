@@ -1,11 +1,12 @@
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import type { PrismaClient } from "@/generated/prisma"
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { PrismaClient: PrismaCl } = require("@prisma/client")
 
-const globalForPrisma = globalThis as { prisma?: PrismaClient }
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
 
 if (!globalForPrisma.prisma) {
-  globalForPrisma.prisma = new PrismaCl()
+  globalForPrisma.prisma = new PrismaCl() as PrismaClient
 }
 
-export const db = globalForPrisma.prisma
+export const db = globalForPrisma.prisma as PrismaClient

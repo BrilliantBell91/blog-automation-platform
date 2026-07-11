@@ -39,7 +39,7 @@ export default async function PostPage({ params }: PostPageProps) {
   if (!post) {
     // Notion 포스트가 없으면 mock으로 폴백 (로컬 테스트용)
     const mockPosts = generateMockPosts(MOCK_POOL_SIZE)
-    post = mockPosts.find((p) => p.id === id)
+    post = mockPosts.find((p) => p.id === id) || null
     allPosts = mockPosts
   } else {
     // Notion 포스트 찾음
