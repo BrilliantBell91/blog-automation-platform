@@ -28,7 +28,7 @@ export interface GenerateDraftResponse {
 
 // GET /api/admin/drafts 응답
 export interface GetAdminDraftsResponse {
-  drafts: Draft[]
+  items: Array<{ post: Post; draft: Draft | null }>
   total: number
 }
 

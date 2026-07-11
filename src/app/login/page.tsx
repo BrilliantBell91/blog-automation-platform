@@ -29,7 +29,7 @@ export default function LoginPage() {
     if (result?.error) {
       setError("이메일 또는 비밀번호가 올바르지 않습니다.")
     } else {
-      router.push("/")
+      router.push("/admin/drafts")
       router.refresh()
     }
     setLoading(false)
@@ -41,7 +41,7 @@ export default function LoginPage() {
         <CardHeader>
           <CardTitle className="text-2xl">로그인</CardTitle>
           <CardDescription>
-            테스트 계정: admin@example.com / password
+            관리자 계정으로 로그인해주세요.
           </CardDescription>
         </CardHeader>
         <CardContent>

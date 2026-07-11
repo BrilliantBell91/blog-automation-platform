@@ -1,8 +1,8 @@
-import { generateMockDraftList } from "@/lib/mockData"
+import { getDraftListItems } from "@/lib/drafts"
 import { DraftDashboard } from "@/components/DraftDashboard"
 
-export default function AdminDraftsPage() {
-  const items = generateMockDraftList(12)
+export default async function AdminDraftsPage() {
+  const { items } = await getDraftListItems("all")
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">

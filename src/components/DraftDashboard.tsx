@@ -1,10 +1,10 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { Loader2, MoreHorizontal, Eye } from "lucide-react"
 import { toast } from "sonner"
 import { Post, Draft, DraftStatus } from "@/types"
-import { generateMockDraft } from "@/lib/mockData"
 import { formatDate } from "@/lib/formatters"
 import { DRAFT_STATUS } from "@/constants"
 import {
@@ -51,6 +51,7 @@ function getDraftStatusBadgeVariant(
 }
 
 export function DraftDashboard({ initialItems }: DraftDashboardProps) {
+  const router = useRouter()
   const [items, setItems] = useState(initialItems)
   const [activeFilter, setActiveFilter] = useState<FilterType>("all")
   const [previewItem, setPreviewItem] = useState<{
@@ -76,44 +77,54 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
     게시완료: items.filter((i) => i.draft?.status === "게시완료").length,
   }
 
-  // 초안 생성 목업
-  function handleGenerateDraft(postId: string) {
-    const post = items.find((i) => i.post.id === postId)?.post
-    if (!post) return
+  // 초안 생성
+  async function handleGenerateDraft(post: Post) {
+    setGeneratingIds((prev) => new Set(prev).add(post.id))
 
-    setGeneratingIds((prev) => new Set(prev).add(postId))
+    try {
+      const res = await fetch("/api/drafts/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ postId: post.notionId }), // Notion 페이지 ID 전달
+      })
 
-    setTimeout(() => {
-      setItems((prev) =>
-        prev.map((item) =>
-          item.post.id === postId
-            ? { ...item, draft: generateMockDraft(postId) }
-            : item
-        )
-      )
+      if (!res.ok) {
+        const error = await res.json()
+        throw new Error(error.error || "초안 생성 실패")
+      }
+
+      toast.success(`"${post.title}" 초안이 생성되었습니다`)
+      router.refresh() // Next.js가 서버 컴포넌트 재실행해 새 initialItems 전달
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "초안 생성에 실패했습니다")
+    } finally {
       setGeneratingIds((prev) => {
         const next = new Set(prev)
-        next.delete(postId)
+        next.delete(post.id)
         return next
       })
-      toast.success(`"${post.title}" 초안이 생성되었습니다`)
-    }, 900)
+    }
   }
 
   // 상태 변경
-  function handleStatusChange(postId: string, status: DraftStatus) {
-    setItems((prev) =>
-      prev.map((item) => {
-        if (item.post.id !== postId) return item
-        if (status === "미생성") return { ...item, draft: null }
-        if (!item.draft) return item
-        return {
-          ...item,
-          draft: { ...item.draft, status, updatedAt: new Date() },
-        }
+  async function handleStatusChange(draftId: string, status: DraftStatus) {
+    try {
+      const res = await fetch(`/api/admin/drafts/${draftId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
       })
-    )
-    toast.success("상태가 변경되었습니다")
+
+      if (!res.ok) {
+        const error = await res.json()
+        throw new Error(error.error || "상태 변경 실패")
+      }
+
+      toast.success("상태가 변경되었습니다")
+      router.refresh()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "상태 변경에 실패했습니다")
+    }
   }
 
   return (
@@ -197,7 +208,7 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                         variant="outline"
                         size="sm"
                         className="h-11"
-                        onClick={() => handleGenerateDraft(post.id)}
+                        onClick={() => handleGenerateDraft(post)}
                         disabled={generatingIds.has(post.id)}
                         aria-busy={generatingIds.has(post.id)}
                       >
@@ -244,7 +255,7 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                                 key={status}
                                 onClick={() =>
                                   handleStatusChange(
-                                    post.id,
+                                    draft.id,
                                     status as DraftStatus
                                   )
                                 }

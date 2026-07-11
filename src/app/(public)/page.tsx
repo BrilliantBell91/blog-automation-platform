@@ -1,24 +1,23 @@
 import Link from "next/link"
 import { Search } from "lucide-react"
-import { generateMockPosts } from "@/lib/mockData"
+import { getCachedPublishedPosts, getCachedCategories } from "@/lib/postsCache"
 import { PostList } from "@/components/PostList"
 import { CategoryFilter } from "@/components/CategoryFilter"
 import { Pagination } from "@/components/Pagination"
 import { Card, CardContent } from "@/components/ui/card"
-import { DEFAULT_CATEGORIES, POSTS_PER_PAGE } from "@/constants"
+import { POSTS_PER_PAGE } from "@/constants"
 
 interface HomePageProps {
   searchParams: Promise<{ page?: string }>
 }
 
-// 더미 데이터 24개로 3페이지 분량의 페이지네이션 데모를 구성한다
-const MOCK_POOL_SIZE = 24
-
 export default async function HomePage({ searchParams }: HomePageProps) {
   const { page } = await searchParams
   const currentPage = Math.max(1, Number(page) || 1)
 
-  const allPosts = generateMockPosts(MOCK_POOL_SIZE)
+  const allPosts = await getCachedPublishedPosts()
+  const categories = await getCachedCategories()
+
   const totalPages = Math.max(1, Math.ceil(allPosts.length / POSTS_PER_PAGE))
   const pagedPosts = allPosts.slice(
     (currentPage - 1) * POSTS_PER_PAGE,
@@ -33,7 +32,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <p className="text-muted-foreground">맛집, 육아, 결혼 이야기를 나눕니다.</p>
       </header>
 
-      <CategoryFilter categories={[...DEFAULT_CATEGORIES]} />
+      <CategoryFilter categories={categories} />
 
       {/* 검색 페이지로 이동하는 배너 링크 — 포커스 링을 명시해 키보드 접근성 확보 */}
       <Link

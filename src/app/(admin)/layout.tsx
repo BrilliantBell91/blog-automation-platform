@@ -1,14 +1,20 @@
+import { redirect } from "next/navigation"
+import { auth } from "@/auth"
 import { AdminNav } from '@/components/AdminNav'
 import { AdminHeader } from '@/components/AdminHeader'
 import { Toaster } from '@/components/ui/sonner'
 import { Sheet } from '@/components/ui/sheet'
 
-export default function AdminLayout({
+export default async function AdminLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
-  // TODO Task 008: auth() 세션 체크 → 미인증 사용자 redirect("/login")
+  const session = await auth()
+  if (!session?.user) {
+    redirect("/login")
+  }
+
   // Sheet(Radix Dialog)는 비제어(uncontrolled) 상태로 동작하므로 별도 useState 없이
   // 트리거(AdminHeader)와 콘텐츠(AdminNav)를 같은 <Sheet> 하위 트리에 두기만 하면 연결됨
   return (

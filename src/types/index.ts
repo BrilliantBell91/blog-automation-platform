@@ -49,7 +49,7 @@ export interface Draft {
   postId: string
   generatedContent: string
   status: DraftStatus
-  reviewedById?: string
+  reviewedById?: string | null
   createdAt: Date
   updatedAt: Date
 }
