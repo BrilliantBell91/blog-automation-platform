@@ -1,6 +1,6 @@
 import bcryptjs from "bcryptjs"
 import { db } from "./db"
-import type { User } from "@/generated/prisma"
+import type { User } from "@/generated/prisma/client"
 
 const SALT_ROUNDS = 10
 

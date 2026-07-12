@@ -4,7 +4,7 @@ import { db } from "./db"
 import { getPublishedPosts } from "./notion"
 import { arrayToTags } from "./formatters"
 import type { Post as NotionPost } from "@/types"
-import type { Post as DbPost } from "@/generated/prisma"
+import type { Post as DbPost } from "@/generated/prisma/client"
 
 /**
  * Notion 포스트 1건을 로컬 Post 테이블에 notionId 기준으로 upsert
