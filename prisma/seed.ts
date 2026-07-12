@@ -1,3 +1,4 @@
+import "dotenv/config"
 import { db } from "../src/lib/db"
 import { hashPassword } from "../src/lib/auth"
 
