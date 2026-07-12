@@ -474,6 +474,56 @@ Notion CMS 블로그 자동화 플랫폼은 블로거를 위한 콘텐츠 관리
 
 ---
 
+## Phase 5: 프로덕션 배포 완성
+
+### Task 014: SQLite → Turso(libSQL) 마이그레이션 ✅
+
+**목표**: 서버리스 환경에서 유지되지 않는 파일 기반 SQLite를 Turso(libSQL) 호스팅 DB로 실제 전환
+
+**구현 사항** (완료):
+- ✅ `src/lib/db.ts`를 Prisma 7 드라이버 어댑터 패턴으로 재작성
+  - ✅ `@libsql/client` + `@prisma/adapter-libsql` 설치
+  - ✅ `new PrismaClient({ adapter: new PrismaLibSql({ url, authToken }) })` — 로컬 `file:`과 원격 `libsql://` URL 모두 동일한 어댑터로 지원
+  - ✅ `prisma/schema.prisma`의 `datasource provider`는 `sqlite` 그대로 유지(Turso는 SQLite 호환)
+- ✅ Turso 계정 생성 및 데이터베이스 프로비저닝(웹 대시보드, Windows에서 Turso CLI 설치 실패로 대체)
+- ✅ `scripts/migrate-turso.ts` 신규: `prisma migrate deploy`가 `libsql://` 스킴을 인식하지 못해(마이그레이션 엔진이 어댑터를 우회) 대신 `@libsql/client`로 `prisma/migrations/*/migration.sql`을 순서대로 원격 실행
+- ✅ 관리자 계정 시드(`prisma/seed.ts`, `dotenv/config` 로딩 누락 수정) 및 원격 DB 조회로 검증
+- ✅ README/`.env.example`: "⚠️ SQLite 프로덕션 한계" → "✅ Turso로 마이그레이션 완료"로 갱신
+
+### Task 015: Vercel 실제 배포 ✅
+
+**목표**: GitHub 저장소를 Vercel에 연결하고 프로덕션 환경에 실제 배포
+
+**구현 사항** (완료):
+- ✅ Vercel 계정 생성 및 CLI 인증(`vercel login`, GitHub 연동)
+- ✅ `vercel link --yes`로 프로젝트 생성 및 GitHub 저장소 자동 연결(`brilliant-bell/blog-automation-platform`)
+- ✅ 환경변수 11개 설정(Production/Preview/Development)
+  - ✅ `AUTH_SECRET`, `REVALIDATE_SECRET`, `LLM_PROVIDER`: CLI로 신규 생성값 자동 설정
+  - ✅ `DATABASE_URL`, `TURSO_AUTH_TOKEN`, `NOTION_API_KEY`, `NOTION_DATABASE_ID`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `AUTH_URL`: Vercel 대시보드에서 직접 입력(민감정보 대화 노출 방지)
+- ✅ **배포 중 발견된 버그 수정**: Prisma 7의 `prisma-client` 제너레이터는 `index.ts`가 아닌 `client.ts`를 진입점으로 사용 — 로컬은 구버전 잔여 파일로 우연히 동작했으나 Vercel의 클린 빌드에서 `Module not found` 발생. `src/lib/db.ts`, `src/lib/auth.ts`, `src/lib/posts.ts`의 import 경로를 `@/generated/prisma` → `@/generated/prisma/client`로 수정
+- ✅ `vercel --prod`로 프로덕션 배포 완료: https://blog-automation-platform.vercel.app
+- ✅ 배포 후 End-to-End 스모크 테스트 전부 통과:
+  - 홈페이지, `/login`, `/api/posts`, `/api/categories`: 200 응답
+  - `/api/admin/drafts` 미인증 시 401(인증 정상 작동)
+  - CSRF → 자격증명 로그인 → 세션 확인까지 전체 인증 플로우 실제 Turso DB로 검증됨
+
+---
+
+## Phase 5 완료 요약
+
+**완료 일자**: 2026-07-12
+
+**2개 Task 구현 완료**:
+- Task 014 (Turso 마이그레이션): 드라이버 어댑터 전환, 수동 마이그레이션 스크립트, 실제 원격 DB 적용
+- Task 015 (Vercel 배포): 실제 프로덕션 배포 및 End-to-End 인증 플로우 검증
+
+**주요 산출물**:
+- 커밋: `d74d49f`, `97cc44f`(Task 014), `36aac24`(Task 015 빌드 픽스)
+- 프로덕션 URL: https://blog-automation-platform.vercel.app
+- 신규 파일: `scripts/migrate-turso.ts`
+
+---
+
 ## 주요 기술적 고려사항
 
 ### Notion API Rate Limit 대응
@@ -544,4 +594,4 @@ Notion CMS 블로그 자동화 플랫폼은 블로거를 위한 콘텐츠 관리
 
 ---
 
-**마지막 업데이트**: 2026-07-11
+**마지막 업데이트**: 2026-07-12
