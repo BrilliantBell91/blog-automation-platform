@@ -2,13 +2,29 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 import { generateNaverDraft } from "./llm"
 import type { Post } from "@/types"
 
-vi.mock("@anthropic-ai/sdk", () => {
+const generateContentMock = vi.fn()
+
+vi.mock("@google/genai", () => {
+  class ApiError extends Error {
+    status: number
+    constructor(options: { message: string; status: number }) {
+      super(options.message)
+      this.name = "ApiError"
+      this.status = options.status
+    }
+  }
   return {
-    default: vi.fn(() => ({
-      messages: {
-        create: vi.fn(),
-      },
+    GoogleGenAI: vi.fn(() => ({
+      models: { generateContent: generateContentMock },
     })),
+    ApiError,
+    UrlRetrievalStatus: {
+      URL_RETRIEVAL_STATUS_UNSPECIFIED: "URL_RETRIEVAL_STATUS_UNSPECIFIED",
+      URL_RETRIEVAL_STATUS_SUCCESS: "URL_RETRIEVAL_STATUS_SUCCESS",
+      URL_RETRIEVAL_STATUS_ERROR: "URL_RETRIEVAL_STATUS_ERROR",
+      URL_RETRIEVAL_STATUS_PAYWALL: "URL_RETRIEVAL_STATUS_PAYWALL",
+      URL_RETRIEVAL_STATUS_UNSAFE: "URL_RETRIEVAL_STATUS_UNSAFE",
+    },
   }
 })
 
@@ -39,17 +55,178 @@ describe("llm", () => {
 
   describe("generateNaverDraft", () => {
     it("LLM_API_KEY가 없으면 에러를 던진다", async () => {
-      delete process.env.LLM_API_KEY
       await expect(generateNaverDraft(mockPost)).rejects.toThrow(
         "LLM_API_KEY가 설정되지 않았습니다."
       )
+      expect(generateContentMock).not.toHaveBeenCalled()
     })
 
-    it("스타일 가이드가 있으면 system prompt에 포함된다", async () => {
+    it("정상 응답 시 생성된 텍스트를 반환한다", async () => {
       process.env.LLM_API_KEY = "test-key"
-      // 실제 API 호출을 막기 위해 Anthropic 모킹 필요
-      // 현재 구조에서는 모킹이 복잡하므로 기본 validation만 수행
-      expect(process.env.LLM_API_KEY).toBe("test-key")
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      const result = await generateNaverDraft(mockPost)
+
+      expect(result).toBe("생성된 초안 내용")
+      expect(generateContentMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("tags가 있으면 필수 포함 해시태그로 사용자 메시지에 들어간다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft(mockPost)
+
+      const callArgs = generateContentMock.mock.calls[0][0]
+      expect(callArgs.contents).toContain("필수 포함 해시태그: 서울, 카페")
+    })
+
+    it("tags가 없으면 스타일에 맞게 직접 구성하라는 안내가 들어간다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft({ ...mockPost, tags: [] })
+
+      const callArgs = generateContentMock.mock.calls[0][0]
+      expect(callArgs.contents).toContain("필수 포함 해시태그: (입력 없음")
+    })
+
+    it("keywords가 있으면 필수 포함 문구가 사용자 메시지에 들어간다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft({ ...mockPost, keywords: ["숙성회", "오션뷰"] })
+
+      const callArgs = generateContentMock.mock.calls[0][0]
+      expect(callArgs.contents).toContain("필수 포함 키워드")
+      expect(callArgs.contents).toContain("숙성회, 오션뷰")
+    })
+
+    it("contentAttachments가 있으면 사진/링크 마커가 사용자 메시지에 들어간다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/photo.jpg" },
+          { kind: "link", url: "https://map.naver.com/p/place/123" },
+        ],
+      })
+
+      const callArgs = generateContentMock.mock.calls[0][0]
+      expect(callArgs.contents).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://s3.example.com/photo.jpg]"
+      )
+      expect(callArgs.contents).toContain(
+        "[참고링크 - 지도/메뉴/리뷰 등 실제로 확인되는 내용만 반영: https://map.naver.com/p/place/123]"
+      )
+    })
+
+    it("url_context 툴이 항상 활성화된 상태로 호출된다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft(mockPost)
+
+      const callArgs = generateContentMock.mock.calls[0][0]
+      expect(callArgs.config.tools).toEqual([{ urlContext: {} }])
+    })
+
+    it("링크 조회 실패가 있으면 결과 끝에 경고 문구를 덧붙인다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "생성된 초안 내용",
+        candidates: [
+          {
+            urlContextMetadata: {
+              urlMetadata: [
+                { retrievedUrl: "https://place.map.naver.com/12345", urlRetrievalStatus: "URL_RETRIEVAL_STATUS_ERROR" },
+                { retrievedUrl: "https://example.com/ok", urlRetrievalStatus: "URL_RETRIEVAL_STATUS_SUCCESS" },
+              ],
+            },
+          },
+        ],
+      })
+
+      const result = await generateNaverDraft(mockPost)
+
+      expect(result).toContain("생성된 초안 내용")
+      expect(result).toContain("자동으로 내용을 확인하지 못했습니다")
+      expect(result).toContain("https://place.map.naver.com/12345")
+      expect(result).not.toContain("https://example.com/ok")
+    })
+
+    it("urlContextMetadata가 없거나 전부 성공이면 경고 문구를 붙이지 않는다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "생성된 초안 내용",
+        candidates: [
+          {
+            urlContextMetadata: {
+              urlMetadata: [
+                { retrievedUrl: "https://example.com/ok", urlRetrievalStatus: "URL_RETRIEVAL_STATUS_SUCCESS" },
+              ],
+            },
+          },
+        ],
+      })
+
+      const result = await generateNaverDraft(mockPost)
+
+      expect(result).toBe("생성된 초안 내용")
+    })
+
+    it("스타일 가이드가 있으면 systemInstruction에 포함된다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft(mockPost, "커스텀 스타일 가이드입니다")
+
+      const callArgs = generateContentMock.mock.calls[0][0]
+      expect(callArgs.config.systemInstruction).toContain("커스텀 스타일 가이드입니다")
+    })
+
+    it("응답에 텍스트가 없으면 에러를 던진다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({ text: undefined })
+
+      await expect(generateNaverDraft(mockPost)).rejects.toThrow(
+        "LLM 응답에서 텍스트를 추출할 수 없습니다."
+      )
+    })
+
+    it("429 에러 발생 시 재시도 후 최종 실패하면 에러를 전파한다", async () => {
+      vi.useFakeTimers()
+      process.env.LLM_API_KEY = "test-key"
+      const { ApiError } = await import("@google/genai")
+      generateContentMock.mockRejectedValue(new ApiError({ message: "Too Many Requests", status: 429 }))
+
+      const promise = generateNaverDraft(mockPost)
+      const assertion = expect(promise).rejects.toMatchObject({ status: 429 })
+      await vi.runAllTimersAsync()
+      await assertion
+
+      // 최초 시도 + GEMINI_RATE_LIMIT.MAX_RETRIES(3) 재시도 = 총 4회 호출
+      expect(generateContentMock).toHaveBeenCalledTimes(4)
+      vi.useRealTimers()
+    })
+
+    it("429 에러가 재시도 중 정상 응답으로 회복되면 결과를 반환한다", async () => {
+      vi.useFakeTimers()
+      process.env.LLM_API_KEY = "test-key"
+      const { ApiError } = await import("@google/genai")
+      generateContentMock
+        .mockRejectedValueOnce(new ApiError({ message: "Too Many Requests", status: 429 }))
+        .mockResolvedValueOnce({ text: "재시도 후 생성된 초안" })
+
+      const promise = generateNaverDraft(mockPost)
+      await vi.runAllTimersAsync()
+      const result = await promise
+
+      expect(result).toBe("재시도 후 생성된 초안")
+      expect(generateContentMock).toHaveBeenCalledTimes(2)
+      vi.useRealTimers()
     })
   })
 })

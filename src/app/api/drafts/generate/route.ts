@@ -1,5 +1,6 @@
 import { revalidatePath } from "next/cache"
 import { NextRequest, NextResponse } from "next/server"
+import { ApiError } from "@google/genai"
 import { auth } from "@/auth"
 import { getCachedPostById } from "@/lib/postsCache"
 import { invalidatePostCache } from "@/lib/postsCache"
@@ -89,6 +90,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(response)
   } catch (error) {
     console.error("[POST /api/drafts/generate]", error)
+
+    if (error instanceof ApiError && error.status === 429) {
+      return NextResponse.json(
+        { error: "요청이 많아 잠시 후 다시 시도해주세요." },
+        { status: 429 }
+      )
+    }
+
     const message = error instanceof Error ? error.message : "초안 생성 중 오류가 발생했습니다."
     return NextResponse.json({ error: message }, { status: 500 })
   }

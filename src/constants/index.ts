@@ -16,6 +16,12 @@ export const NOTION_RATE_LIMIT = {
   RETRY_BACKOFF_MS: 1000,
 } as const
 
+// Gemini(무료 티어) API Rate Limit 설정
+export const GEMINI_RATE_LIMIT = {
+  MAX_RETRIES: 3,
+  RETRY_BACKOFF_MS: 2000,
+} as const
+
 // 검색 타입
 export const SEARCH_TYPES = {
   ALL: 'all',

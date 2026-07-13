@@ -8,7 +8,7 @@ import {
   collectPaginatedAPI,
 } from "@notionhq/client"
 import type { PageObjectResponse, BlockObjectResponse } from "@notionhq/client"
-import { Post, NotionBlock } from "@/types"
+import { Post, NotionBlock, LlmAttachment } from "@/types"
 import { NOTION_RATE_LIMIT, NOTION_DATABASE_ID } from "@/constants"
 
 const notion = new Client({ auth: process.env.NOTION_API_KEY })
@@ -79,6 +79,12 @@ function getTags(page: PageObjectResponse, name: string): string[] {
   return []
 }
 
+// Keyword 속성 - 있으면 네이버 초안에 반드시 포함되어야 하는 확인된 사실.
+// Tags와 동일하게 multi_select 또는 콤마 구분 rich_text를 모두 지원한다.
+function getKeywords(page: PageObjectResponse, name: string): string[] {
+  return getTags(page, name)
+}
+
 function getDate(page: PageObjectResponse, name: string): Date | undefined {
   const prop = page.properties[name]
   return prop?.type === "date" && prop.date?.start ? new Date(prop.date.start) : undefined
@@ -124,6 +130,22 @@ function blockToNotionBlock(block: BlockObjectResponse): NotionBlock | null {
       const imageUrl = block.image.type === "external" ? block.image.external.url : block.image.file.url
       return { id: block.id, type: "image", content: richTextToPlainText(block.image.caption), imageUrl }
     }
+    case "bookmark":
+      return {
+        id: block.id,
+        type: "bookmark",
+        content: richTextToPlainText(block.bookmark.caption),
+        linkUrl: block.bookmark.url,
+      }
+    case "link_preview":
+      return { id: block.id, type: "link_preview", content: "", linkUrl: block.link_preview.url }
+    case "embed":
+      return {
+        id: block.id,
+        type: "embed",
+        content: richTextToPlainText(block.embed.caption),
+        linkUrl: block.embed.url,
+      }
     default:
       return null
   }
@@ -142,11 +164,58 @@ async function getPageBlocks(pageId: string): Promise<NotionBlock[]> {
     .filter((block): block is NotionBlock => block !== null)
 }
 
+// 공개 웹사이트/검색/로컬 DB에 쓰이는 순수 본문 텍스트.
+// 사진·링크류 블록은 여기서 제외한다 — 마커 텍스트가 사이트에 그대로 노출되면 안 되기 때문.
+// (이미지 자체는 blocks 배열을 통해 PostBody가 별도로 렌더링한다.)
+const NARRATIVE_BLOCK_TYPES = new Set<NotionBlock["type"]>([
+  "paragraph",
+  "heading_1",
+  "heading_2",
+  "heading_3",
+  "bulleted_list_item",
+  "numbered_list_item",
+  "quote",
+  "code",
+])
+
 function blocksToContent(blocks: NotionBlock[]): string {
   return blocks
+    .filter((b) => NARRATIVE_BLOCK_TYPES.has(b.type))
     .map((b) => b.content)
     .filter(Boolean)
     .join("\n\n")
+}
+
+// 본문 블록 중 사진/링크류를 네이버 초안 생성(LLM)용 첨부 목록으로 뽑아낸다.
+function blocksToAttachments(blocks: NotionBlock[]): LlmAttachment[] {
+  const attachments: LlmAttachment[] = []
+  for (const block of blocks) {
+    if (block.type === "image" && block.imageUrl) {
+      attachments.push({ kind: "image", url: block.imageUrl, label: block.content || undefined })
+    } else if (
+      (block.type === "bookmark" || block.type === "link_preview" || block.type === "embed") &&
+      block.linkUrl
+    ) {
+      attachments.push({ kind: "link", url: block.linkUrl, label: block.content || undefined })
+    }
+  }
+  return attachments
+}
+
+// "Content" 속성이 페이지 본문 블록이 아니라 "파일과 미디어" 타입으로 쓰이는 경우를 지원한다.
+// 실제 업로드된 파일은 사진으로, 파일명 자리에 URL을 붙여넣은 외부 항목은 참고링크로 취급한다.
+function getContentPropertyAttachments(page: PageObjectResponse, name: string): LlmAttachment[] {
+  const prop = page.properties[name]
+  if (prop?.type !== "files") return []
+
+  return prop.files.map((file): LlmAttachment => {
+    if (file.type === "file") {
+      return { kind: "image", url: file.file.url, label: file.name || undefined }
+    }
+    // 이름이 URL 자체와 같으면 라벨로서 의미가 없으므로 생략한다.
+    const label = file.name && file.name !== file.external.url ? file.name : undefined
+    return { kind: "link", url: file.external.url, label }
+  })
 }
 
 function blocksToExcerpt(blocks: NotionBlock[], maxLength = 120): string {
@@ -178,6 +247,8 @@ async function mapPageToPost(page: PageObjectResponse): Promise<Post> {
     naverPostUrl: getUrl(page, "NaverPostUrl"),
     blocks,
     thumbnailBlockId: fallbackImageBlock?.id,
+    keywords: getKeywords(page, "Keyword"),
+    contentAttachments: [...blocksToAttachments(blocks), ...getContentPropertyAttachments(page, "Content")],
     createdAt: new Date(page.created_time),
     updatedAt: new Date(page.last_edited_time),
   }
