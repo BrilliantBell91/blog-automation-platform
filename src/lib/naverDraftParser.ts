@@ -117,7 +117,10 @@ export function naverDraftToHtml(content: string): string {
         case "image":
           return `<p><img src="${block.url}" alt="${escapeHtml(block.caption ?? "")}" style="max-width:100%;"></p>`
         case "link":
-          return `<p>📍 <a href="${block.url}">${escapeHtml(block.label)}</a></p>`
+          // 네이버 블로그 에디터는 링크가 걸리지 않은 순수 URL 한 줄을 그대로 붙여넣으면
+          // 자동으로 인식해 지도 위젯(카드)으로 변환해준다. <a> 태그로 감싸면 이미 "링크"로
+          // 처리되어 이 자동 변환이 걸리지 않는 것으로 확인되어, 앵커 없이 URL 텍스트만 둔다.
+          return `<p>${escapeHtml(block.url)}</p>`
         case "hashtags":
           return `<p>${block.tags.map((t) => "#" + escapeHtml(t)).join(" ")}</p>`
         case "quote":

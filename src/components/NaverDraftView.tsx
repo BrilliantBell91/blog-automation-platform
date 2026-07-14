@@ -1,5 +1,5 @@
 import { Fragment } from "react"
-import { MapPin } from "lucide-react"
+import { MapPin, ExternalLink } from "lucide-react"
 import { NaverDraftBlock, parseNaverDraft } from "@/lib/naverDraftParser"
 import { Badge } from "@/components/ui/badge"
 
@@ -38,17 +38,24 @@ function renderBlock(block: NaverDraftBlock, index: number) {
         </figure>
       )
     case "link":
-      // 실제 게시글처럼 지도 URL을 그대로 노출하지 않고, 장소명 카드 형태의 링크로 보여준다.
+      // 실제 게시글처럼 지도 URL을 그대로 노출하지 않고, "위치 안내" 배너 카드로 보여준다.
+      // (실제 지도 이미지는 네이버 지도 og:image가 고정 로고만 반환해 재현 불가 — 카드 스타일로 대체)
       return (
         <a
           key={index}
           href={block.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="not-prose my-4 flex items-center gap-2 rounded-lg border bg-muted/40 p-3 text-sm no-underline hover:bg-muted"
+          className="not-prose my-4 flex items-center gap-3 rounded-xl border bg-gradient-to-br from-muted/60 to-muted/20 p-4 no-underline transition-colors hover:from-muted hover:to-muted/40"
         >
-          <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <span className="font-medium">{block.label}</span>
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10">
+            <MapPin className="h-5 w-5 text-primary" aria-hidden="true" />
+          </span>
+          <span className="flex-1">
+            <span className="block text-xs text-muted-foreground">위치는 요기 👇</span>
+            <span className="block font-medium">{block.label}</span>
+          </span>
+          <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         </a>
       )
     case "hashtags":

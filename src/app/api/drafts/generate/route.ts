@@ -32,7 +32,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Task 012: getPostById → getCachedPostById로 교체 (중복 Notion 호출 절감)
+    // 초안 생성 버튼을 누른 시점 = 최신 Notion 내용을 반영해야 하는 시점이므로,
+    // 조회 직전에 캐시를 비워 15분짜리 캐시된 옛 데이터(예: 수정 전 이미지)를 쓰지 않도록 한다.
+    invalidatePostCache(postId)
     const notionPost = await getCachedPostById(postId)
     if (!notionPost) {
       return NextResponse.json(

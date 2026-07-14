@@ -33,6 +33,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { DraftPreview } from "@/components/DraftPreview"
@@ -225,77 +231,99 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                           "초안 생성"
                         )}
                       </Button>
-                    ) : (
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-11 w-11"
-                          aria-label="초안 미리보기"
-                          onClick={() => setPreviewItem({ post, draft })}
-                        >
-                          <Eye className="h-4 w-4" aria-hidden="true" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-11 w-11"
-                          aria-label="블로그 화면으로 보기"
-                          asChild
-                        >
-                          <Link
-                            href={`/admin/drafts/${post.id}/preview`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            <ExternalLink className="h-4 w-4" aria-hidden="true" />
-                          </Link>
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-11 w-11"
-                          aria-label="초안 재생성"
-                          onClick={() => handleGenerateDraft(post, true)}
-                          disabled={generatingIds.has(post.id)}
-                          aria-busy={generatingIds.has(post.id)}
-                        >
-                          <RefreshCw
-                            className={`h-4 w-4 ${generatingIds.has(post.id) ? "animate-spin" : ""}`}
-                            aria-hidden="true"
-                          />
-                        </Button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-11 w-11"
-                              aria-label="초안 상태 변경"
-                            >
-                              <MoreHorizontal
-                                className="h-4 w-4"
-                                aria-hidden="true"
-                              />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            {Object.keys(DRAFT_STATUS).map((status) => (
-                              <DropdownMenuItem
-                                key={status}
-                                onClick={() =>
-                                  handleStatusChange(
-                                    draft.id,
-                                    status as DraftStatus
-                                  )
-                                }
+    ) : (
+                      <TooltipProvider delayDuration={200}>
+                        <div className="flex items-center justify-end gap-2">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-11 w-11"
+                                aria-label="초안 미리보기"
+                                onClick={() => setPreviewItem({ post, draft })}
                               >
-                                {status}
-                              </DropdownMenuItem>
-                            ))}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
+                                <Eye className="h-4 w-4" aria-hidden="true" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>초안 미리보기</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-11 w-11"
+                                aria-label="블로그 화면으로 보기"
+                                asChild
+                              >
+                                <Link
+                                  href={`/admin/drafts/${post.id}/preview`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                                </Link>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>블로그 화면으로 보기</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-11 w-11"
+                                aria-label="초안 재생성"
+                                onClick={() => handleGenerateDraft(post, true)}
+                                disabled={generatingIds.has(post.id)}
+                                aria-busy={generatingIds.has(post.id)}
+                              >
+                                <RefreshCw
+                                  className={`h-4 w-4 ${generatingIds.has(post.id) ? "animate-spin" : ""}`}
+                                  aria-hidden="true"
+                                />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>초안 재생성</TooltipContent>
+                          </Tooltip>
+                          <DropdownMenu>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-11 w-11"
+                                    aria-label="초안 상태 변경"
+                                  >
+                                    <MoreHorizontal
+                                      className="h-4 w-4"
+                                      aria-hidden="true"
+                                    />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                              </TooltipTrigger>
+                              <TooltipContent>초안 상태 변경</TooltipContent>
+                            </Tooltip>
+                            <DropdownMenuContent align="end">
+                              {Object.keys(DRAFT_STATUS).map((status) => (
+                                <DropdownMenuItem
+                                  key={status}
+                                  onClick={() =>
+                                    handleStatusChange(
+                                      draft.id,
+                                      status as DraftStatus
+                                    )
+                                  }
+                                >
+                                  {status}
+                                </DropdownMenuItem>
+                              ))}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </TooltipProvider>
                     )}
                   </TableCell>
                 </TableRow>

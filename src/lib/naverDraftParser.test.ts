@@ -104,10 +104,13 @@ describe("naverDraftToHtml", () => {
     expect(html).toContain("첫 줄입니다.<br>둘째 줄입니다.")
   })
 
-  it("참고링크는 원본 URL 대신 추출된 장소명을 링크 텍스트로 사용한다", () => {
+  it("참고링크는 네이버 에디터의 지도 위젯 자동 변환을 위해 링크 없이 순수 URL 텍스트로 남긴다", () => {
     const html = naverDraftToHtml(
       "[참고링크 - 지도/메뉴/리뷰 등 실제로 확인되는 내용만 반영: https://map.naver.com/p/search/place?searchText=%EB%B6%80%ED%8F%89]"
     )
-    expect(html).toContain('<a href="https://map.naver.com/p/search/place?searchText=%EB%B6%80%ED%8F%89">부평</a>')
+    expect(html).toContain(
+      "<p>https://map.naver.com/p/search/place?searchText=%EB%B6%80%ED%8F%89</p>"
+    )
+    expect(html).not.toContain("<a href=")
   })
 })
