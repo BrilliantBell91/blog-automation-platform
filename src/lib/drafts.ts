@@ -3,11 +3,35 @@
 import { db } from "./db"
 import { syncPublishedPosts } from "./posts"
 import { tagsToArray } from "./formatters"
+import type { Prisma } from "@/generated/prisma/client"
 import type { Draft, DraftStatus, Post } from "@/types"
 
 export interface DraftListItem {
   post: Post
   draft: Draft | null
+}
+
+type PostWithDraft = Prisma.PostGetPayload<{ include: { draft: true } }>
+
+// Prisma 타입을 앱 타입으로 변환 (목록/단건 조회에서 공통 사용)
+function mapRowToDraftListItem(row: PostWithDraft): DraftListItem {
+  return {
+    post: {
+      ...row,
+      tags: tagsToArray(row.tags),
+    },
+    draft: row.draft
+      ? {
+          id: row.draft.id,
+          postId: row.draft.postId,
+          generatedContent: row.draft.generatedContent,
+          status: row.draft.status as DraftStatus,
+          reviewedById: row.draft.reviewedById,
+          createdAt: row.draft.createdAt,
+          updatedAt: row.draft.updatedAt,
+        }
+      : null,
+  } as DraftListItem
 }
 
 /**
@@ -42,26 +66,19 @@ export async function getDraftListItems(
     db.post.count({ where }),
   ])
 
-  // Prisma 타입을 앱 타입으로 변환
-  const items = rows.map(
-    (row: typeof rows[0]) => ({
-      post: {
-        ...row,
-        tags: tagsToArray(row.tags),
-      },
-      draft: row.draft
-        ? {
-            id: row.draft.id,
-            postId: row.draft.postId,
-            generatedContent: row.draft.generatedContent,
-            status: (row.draft.status as DraftStatus),
-            reviewedById: row.draft.reviewedById,
-            createdAt: row.draft.createdAt,
-            updatedAt: row.draft.updatedAt,
-          }
-        : null,
-    }) as DraftListItem
-  )
+  const items = rows.map((row: typeof rows[0]) => mapRowToDraftListItem(row))
 
   return { items, total }
+}
+
+/**
+ * 단일 포스트(로컬 Post.id 기준)의 포스트+초안 조회 ("블로그 화면" 미리보기 페이지용)
+ */
+export async function getDraftItemByPostId(postId: string): Promise<DraftListItem | null> {
+  const row = await db.post.findUnique({
+    where: { id: postId },
+    include: { draft: true },
+  })
+  if (!row) return null
+  return mapRowToDraftListItem(row)
 }

@@ -1,8 +1,9 @@
 "use client"
 
 import { useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Loader2, MoreHorizontal, Eye } from "lucide-react"
+import { Loader2, MoreHorizontal, Eye, ExternalLink } from "lucide-react"
 import { toast } from "sonner"
 import { Post, Draft, DraftStatus } from "@/types"
 import { formatDate } from "@/lib/formatters"
@@ -234,6 +235,21 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                           onClick={() => setPreviewItem({ post, draft })}
                         >
                           <Eye className="h-4 w-4" aria-hidden="true" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-11 w-11"
+                          aria-label="블로그 화면으로 보기"
+                          asChild
+                        >
+                          <Link
+                            href={`/admin/drafts/${post.id}/preview`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                          </Link>
                         </Button>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>

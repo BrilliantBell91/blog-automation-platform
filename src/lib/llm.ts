@@ -2,7 +2,7 @@ import { GoogleGenAI, ApiError, UrlRetrievalStatus } from "@google/genai"
 import { Post, LlmAttachment } from "@/types"
 import { GEMINI_RATE_LIMIT } from "@/constants"
 
-const MODEL = "gemini-3.5-flash"
+const MODEL = "gemini-3-flash-preview"
 // 링크가 여러 개면 url_context 툴이 추가로 페이지를 fetch하느라 시간이 더 걸릴 수 있어 여유를 둔다.
 const TIMEOUT_MS = 45_000
 

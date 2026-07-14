@@ -98,6 +98,13 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    if (error instanceof ApiError && error.status === 504) {
+      return NextResponse.json(
+        { error: "응답 생성이 지연되어 시간이 초과되었습니다. 잠시 후 다시 시도해주세요." },
+        { status: 504 }
+      )
+    }
+
     const message = error instanceof Error ? error.message : "초안 생성 중 오류가 발생했습니다."
     return NextResponse.json({ error: message }, { status: 500 })
   }
