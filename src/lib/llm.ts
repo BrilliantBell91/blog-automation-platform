@@ -2,7 +2,7 @@ import { GoogleGenAI, ApiError } from "@google/genai"
 import { Post, LlmAttachment } from "@/types"
 import { GEMINI_RATE_LIMIT } from "@/constants"
 import {
-  generateIllustrativeImage,
+  generateAiImage,
   verifyImageRelevance,
   type IllustrativeImageStyle,
 } from "./imageGen"
@@ -244,7 +244,6 @@ async function buildVerifiedPlaceInfoText(attachments: LlmAttachment[]): Promise
   const lines = [`- 상호명: ${place.name ?? "(확인 안 됨)"}`, `- 주소: ${address}`]
   if (place.telephone) lines.push(`- 전화: ${place.telephone}`)
   if (place.businessHours) lines.push(`- 영업시간: ${place.businessHours}`)
-  if (place.parkingInfo) lines.push(`- 주차: ${place.parkingInfo}`)
   if (place.conveniences?.length) lines.push(`- 편의시설: ${place.conveniences.join(", ")}`)
 
   return `\n\n확인된 매장 정보 (사용자가 첨부한 지도 URL 기준 실제 확인된 사실 - 반드시 이 값과 정확히 일치하게 쓰고, 다른 곳에서 본 정보와 달라도 이 값을 따르세요. 여기 없는 항목(화장실 유무 등)은 확인되지 않은 것이니 언급하지 마세요):\n${lines.join("\n")}`
@@ -324,7 +323,7 @@ async function resolveShortfallImages(
 ): Promise<(string | null)[]> {
   if (style !== "photo") {
     return Promise.all(
-      points.map((i) => generateIllustrativeImage(apiKey, paragraphs[i].slice(0, 60), style))
+      points.map((i) => generateAiImage(apiKey, paragraphs[i].slice(0, 60), style))
     )
   }
 
@@ -364,7 +363,7 @@ async function resolveShortfallImages(
   if (missingIndexes.length > 0) {
     const generated = await Promise.all(
       missingIndexes.map((i) =>
-        generateIllustrativeImage(apiKey, paragraphs[points[i]].slice(0, 60), style)
+        generateAiImage(apiKey, paragraphs[points[i]].slice(0, 60), style)
       )
     )
     missingIndexes.forEach((i, k) => {

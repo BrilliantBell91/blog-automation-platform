@@ -8,12 +8,18 @@ const {
   verifyImageRelevanceMock,
   searchNaverPlaceMock,
   fetchNaverPlaceDetailMock,
+  fetchMock,
 } = vi.hoisted(() => ({
   searchRealImagesMock: vi.fn().mockResolvedValue([]),
   verifyImageRelevanceMock: vi.fn().mockResolvedValue(true),
   searchNaverPlaceMock: vi.fn().mockResolvedValue(null),
   fetchNaverPlaceDetailMock: vi.fn().mockResolvedValue(null),
+  // Pollinations 이미지 생성(imageGen.ts)이 전역 fetch를 직접 호출한다. 실제 네트워크를
+  // 타지 않도록 항상 실패시켜 기존 테스트가 기대하는 Gemini 폴백 경로로 넘어가게 한다.
+  fetchMock: vi.fn().mockResolvedValue({ ok: false }),
 }))
+
+vi.stubGlobal("fetch", fetchMock)
 
 vi.mock("./imageSearch", () => ({
   searchRealImages: searchRealImagesMock,
@@ -99,6 +105,7 @@ describe("llm", () => {
     verifyImageRelevanceMock.mockReset().mockResolvedValue(true)
     searchNaverPlaceMock.mockReset().mockResolvedValue(null)
     fetchNaverPlaceDetailMock.mockReset().mockResolvedValue(null)
+    fetchMock.mockReset().mockResolvedValue({ ok: false })
   })
 
   describe("generateNaverDraft", () => {

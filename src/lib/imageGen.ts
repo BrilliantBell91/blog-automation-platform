@@ -6,12 +6,62 @@ import { GoogleGenAI } from "@google/genai"
 
 const IMAGE_MODEL = "gemini-2.5-flash-image"
 
+// Gemini 이미지 생성이 무료 티어 한도(quota)에 자주 걸려서, 키가 필요 없는 무료
+// 서비스인 Pollinations.ai(flux 모델)를 1차로 시도하고, 실패할 때만 Gemini로 폴백한다.
+const POLLINATIONS_BASE_URL = "https://image.pollinations.ai/prompt"
+const POLLINATIONS_MODEL = "flux"
+const POLLINATIONS_TIMEOUT_MS = 20_000
+
 export type IllustrativeImageStyle = "summary" | "photo"
 
 function buildStyleInstruction(style: IllustrativeImageStyle): string {
   return style === "summary"
     ? "사진이 아니라, 핵심 정보를 한눈에 보기 좋게 정리한 카드뉴스/인포그래픽 스타일 이미지로 만들어주세요. 깔끔한 그래픽·아이콘·간단한 도식 위주로, 본문 텍스트를 그대로 옮기지 말고 최소한의 짧은 라벨만 사용하세요."
     : "실사 사진 느낌으로 만들어주세요."
+}
+
+// Pollinations는 요청 URL 자체가 곧 이미지 생성 명령이라, 같은 URL(같은 seed)을
+// 다시 요청해도 같은 이미지가 나온다. 그래서 바이트를 내려받아 base64로 변환하지
+// 않고 URL 문자열만 반환해 초안 텍스트 용량을 가볍게 유지한다.
+async function generateImageWithPollinations(
+  description: string,
+  style: IllustrativeImageStyle
+): Promise<string | null> {
+  try {
+    const prompt = `${buildStyleInstruction(style)} ${description}. 텍스트나 워터마크, 로고 없이.`
+    const seed = Math.floor(Math.random() * 1_000_000)
+    const url = `${POLLINATIONS_BASE_URL}/${encodeURIComponent(prompt)}?model=${POLLINATIONS_MODEL}&width=1024&height=768&nologo=true&seed=${seed}`
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), POLLINATIONS_TIMEOUT_MS)
+    try {
+      const res = await fetch(url, { signal: controller.signal })
+      if (!res.ok) return null
+      const contentType = res.headers.get("content-type") || ""
+      if (!contentType.startsWith("image/")) return null
+      return url
+    } finally {
+      clearTimeout(timeout)
+    }
+  } catch (error) {
+    console.warn("[imageGen] Pollinations 이미지 생성 실패", error)
+    return null
+  }
+}
+
+/**
+ * 장면 설명을 받아 이미지를 생성한다. Pollinations(무료, 키 불필요)를 우선
+ * 시도하고 실패하면 Gemini로 폴백한다. resolveShortfallImages()의 실질적인
+ * 진입점.
+ */
+export async function generateAiImage(
+  apiKey: string,
+  description: string,
+  style: IllustrativeImageStyle = "photo"
+): Promise<string | null> {
+  const pollinationsImage = await generateImageWithPollinations(description, style)
+  if (pollinationsImage) return pollinationsImage
+  return generateIllustrativeImage(apiKey, description, style)
 }
 
 /**
