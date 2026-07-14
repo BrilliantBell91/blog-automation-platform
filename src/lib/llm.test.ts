@@ -262,7 +262,7 @@ describe("llm", () => {
       expect(callArgs.config.tools).toEqual([{ urlContext: {} }])
     })
 
-    it("링크 조회 실패가 있으면 결과 끝에 경고 문구를 덧붙인다", async () => {
+    it("url_context 메타데이터가 있어도 경고 문구를 붙이지 않는다(경고 기능 제거됨)", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({
         text: "생성된 초안 내용",
@@ -271,30 +271,6 @@ describe("llm", () => {
             urlContextMetadata: {
               urlMetadata: [
                 { retrievedUrl: "https://place.map.naver.com/12345", urlRetrievalStatus: "URL_RETRIEVAL_STATUS_ERROR" },
-                { retrievedUrl: "https://example.com/ok", urlRetrievalStatus: "URL_RETRIEVAL_STATUS_SUCCESS" },
-              ],
-            },
-          },
-        ],
-      })
-
-      const result = await generateNaverDraft(mockPost)
-
-      expect(result).toContain("생성된 초안 내용")
-      expect(result).toContain("자동으로 내용을 확인하지 못했습니다")
-      expect(result).toContain("https://place.map.naver.com/12345")
-      expect(result).not.toContain("https://example.com/ok")
-    })
-
-    it("urlContextMetadata가 없거나 전부 성공이면 경고 문구를 붙이지 않는다", async () => {
-      process.env.LLM_API_KEY = "test-key"
-      generateContentMock.mockResolvedValueOnce({
-        text: "생성된 초안 내용",
-        candidates: [
-          {
-            urlContextMetadata: {
-              urlMetadata: [
-                { retrievedUrl: "https://example.com/ok", urlRetrievalStatus: "URL_RETRIEVAL_STATUS_SUCCESS" },
               ],
             },
           },

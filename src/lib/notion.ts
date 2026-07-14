@@ -79,8 +79,10 @@ function getTags(page: PageObjectResponse, name: string): string[] {
   return []
 }
 
-// Keyword 속성 - 있으면 네이버 초안에 반드시 포함되어야 하는 확인된 사실.
-// Tags와 동일하게 multi_select 또는 콤마 구분 rich_text를 모두 지원한다.
+// "Content" 속성 - 해당 글에 핵심적으로 들어가야 하는 내용(네이버 초안에 반드시 포함되어야
+// 하는 확인된 사실). 원래 이름은 "Keyword"였으나 "단어" 나열이 아니라 "글의 핵심 내용"을
+// 반영하는 용도라 속성명이 "Content"로 변경됨. Tags와 동일하게 multi_select 또는 콤마 구분
+// rich_text를 모두 지원한다.
 function getKeywords(page: PageObjectResponse, name: string): string[] {
   return getTags(page, name)
 }
@@ -259,7 +261,7 @@ async function mapPageToPost(page: PageObjectResponse): Promise<Post> {
     naverPostUrl: getUrl(page, "NaverPostUrl"),
     blocks,
     thumbnailBlockId: fallbackImageBlock?.id,
-    keywords: getKeywords(page, "Keyword"),
+    keywords: getKeywords(page, "Content"),
     contentAttachments: [
       ...blocksToAttachments(blocks),
       ...getImagePropertyAttachments(page, "Image"),

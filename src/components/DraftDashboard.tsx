@@ -34,12 +34,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { DraftPreview } from "@/components/DraftPreview"
@@ -175,15 +169,26 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
               <TableHead scope="col" className="hidden md:table-cell">
                 수정일
               </TableHead>
-              <TableHead scope="col" className="text-right">
-                작업
+              {/* 각 작업이 무엇인지 아이콘에 마우스를 올리지 않아도 알 수 있도록, 아이콘 하나당
+                  열 하나 + 헤더 라벨로 구성한다(호버 툴팁 대신 상단 헤더로 항상 명시). */}
+              <TableHead scope="col" className="text-center">
+                수정
+              </TableHead>
+              <TableHead scope="col" className="text-center">
+                미리보기
+              </TableHead>
+              <TableHead scope="col" className="text-center">
+                재생성
+              </TableHead>
+              <TableHead scope="col" className="text-center">
+                상태변경
               </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredItems.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-8">
+                <TableCell colSpan={8} className="text-center py-8">
                   <span className="text-sm text-muted-foreground">
                     {activeFilter === "all"
                       ? "항목이 없습니다."
@@ -210,8 +215,8 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                   <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
                     {formatDate(draft?.updatedAt ?? post.updatedAt)}
                   </TableCell>
-                  <TableCell className="text-right">
-                    {draft === null ? (
+                  {draft === null ? (
+                    <TableCell colSpan={4} className="text-center">
                       <Button
                         variant="outline"
                         size="sm"
@@ -232,86 +237,77 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                           "초안 생성"
                         )}
                       </Button>
-    ) : (
-                      <TooltipProvider delayDuration={200}>
-                        <div className="flex items-center justify-end gap-2">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-11 w-11"
-                                aria-label="수정하기"
-                                onClick={() => setPreviewItem({ post, draft })}
-                              >
-                                <Pencil className="h-4 w-4" aria-hidden="true" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>수정하기</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-11 w-11"
-                                aria-label="초안 미리보기"
-                                asChild
-                              >
-                                <Link
-                                  href={`/admin/drafts/${post.id}/preview`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  <ExternalLink className="h-4 w-4" aria-hidden="true" />
-                                </Link>
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>초안 미리보기</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-11 w-11"
-                                aria-label="초안 재생성"
-                                onClick={() => handleGenerateDraft(post, true)}
-                                disabled={generatingIds.has(post.id)}
-                                aria-busy={generatingIds.has(post.id)}
-                              >
-                                <RefreshCw
-                                  className={`h-4 w-4 ${generatingIds.has(post.id) ? "animate-spin" : ""}`}
-                                  aria-hidden="true"
-                                />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>초안 재생성</TooltipContent>
-                          </Tooltip>
-                          <Select
-                            value={draft.status}
-                            onValueChange={(status) =>
-                              handleStatusChange(draft.id, status as DraftStatus)
-                            }
+                    </TableCell>
+                  ) : (
+                    <>
+                      <TableCell className="text-center">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-11 w-11"
+                          aria-label="수정하기"
+                          onClick={() => setPreviewItem({ post, draft })}
+                        >
+                          <Pencil className="h-4 w-4" aria-hidden="true" />
+                        </Button>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-11 w-11"
+                          aria-label="초안 미리보기"
+                          asChild
+                        >
+                          <Link
+                            href={`/admin/drafts/${post.id}/preview`}
+                            target="_blank"
+                            rel="noopener noreferrer"
                           >
-                            <SelectTrigger
-                              className="h-11 w-[110px]"
-                              aria-label="초안 상태 변경"
-                            >
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {Object.keys(DRAFT_STATUS).map((status) => (
-                                <SelectItem key={status} value={status}>
-                                  {status}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </TooltipProvider>
-                    )}
-                  </TableCell>
+                            <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                          </Link>
+                        </Button>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-11 w-11"
+                          aria-label="초안 재생성"
+                          onClick={() => handleGenerateDraft(post, true)}
+                          disabled={generatingIds.has(post.id)}
+                          aria-busy={generatingIds.has(post.id)}
+                        >
+                          <RefreshCw
+                            className={`h-4 w-4 ${generatingIds.has(post.id) ? "animate-spin" : ""}`}
+                            aria-hidden="true"
+                          />
+                        </Button>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Select
+                          value={draft.status}
+                          onValueChange={(status) =>
+                            handleStatusChange(draft.id, status as DraftStatus)
+                          }
+                        >
+                          <SelectTrigger
+                            className="mx-auto h-11 w-[110px]"
+                            aria-label="초안 상태 변경"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.keys(DRAFT_STATUS).map((status) => (
+                              <SelectItem key={status} value={status}>
+                                {status}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                    </>
+                  )}
                 </TableRow>
               ))
             )}

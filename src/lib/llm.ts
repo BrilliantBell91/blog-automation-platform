@@ -1,4 +1,4 @@
-import { GoogleGenAI, ApiError, UrlRetrievalStatus } from "@google/genai"
+import { GoogleGenAI, ApiError } from "@google/genai"
 import { Post, LlmAttachment } from "@/types"
 import { GEMINI_RATE_LIMIT } from "@/constants"
 import {
@@ -275,25 +275,6 @@ function buildUserMessage(post: Post, verifiedPlaceInfoText: string): string {
 ${post.content || "(본문 텍스트 없음 - 아래 첨부 정보를 참고해 작성)"}${linkMarkersText ? `\n\n${linkMarkersText}` : ""}${imageHintsText}${verifiedPlaceInfoText}${keywordsText}`
 }
 
-// url_context 툴이 실제로 조회하지 못한 링크를 모아 경고 문구를 만든다.
-// 프롬프트 지시만으로는 모델이 사실을 지어낼 위험을 막을 수 없으므로,
-// "정말로 그 URL을 읽었는지"를 API 응답 메타데이터로 검증하는 코드 레벨 안전장치다.
-function buildUnverifiedLinksWarning(
-  urlMetadata: { retrievedUrl?: string; urlRetrievalStatus?: string }[] | undefined
-): string {
-  if (!urlMetadata?.length) return ""
-
-  const failedUrls = urlMetadata
-    .filter((m) => m.urlRetrievalStatus !== UrlRetrievalStatus.URL_RETRIEVAL_STATUS_SUCCESS)
-    .map((m) => m.retrievedUrl)
-    .filter((url): url is string => Boolean(url))
-
-  if (!failedUrls.length) return ""
-
-  const list = failedUrls.map((url) => `- ${url}`).join("\n")
-  return `\n\n---\n⚠️ 아래 링크는 자동으로 내용을 확인하지 못했습니다. 게시 전 직접 확인 후 반영해주세요:\n${list}`
-}
-
 const MARKER_PARAGRAPH = /^\[(사진 원본|참고링크)/
 
 // AI 생성 이미지를 끼워넣을 문단 위치를 고른다. 인사말(첫 문단)/마무리·해시태그(마지막 문단),
@@ -469,13 +450,7 @@ export async function generateNaverDraft(post: Post, styleGuide?: string): Promi
         throw new Error("LLM 응답에서 텍스트를 추출할 수 없습니다.")
       }
 
-      const warning = buildUnverifiedLinksWarning(
-        response.candidates?.[0]?.urlContextMetadata?.urlMetadata
-      )
-
-      const finalText = await insertImages(response.text, apiKey, post)
-
-      return finalText + warning
+      return await insertImages(response.text, apiKey, post)
     } catch (error) {
       if (!shouldTryNextModel(error)) throw error
       console.warn(`[llm] ${model} 사용 불가(할당량 소진/미지원) — 다음 모델로 전환`, error)
