@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { generateNaverDraft } from "./llm"
+import { generateNaverDraft, MODEL_FALLBACK_CHAIN } from "./llm"
 import type { Post } from "@/types"
 
 const generateContentMock = vi.fn()
@@ -187,6 +187,31 @@ describe("llm", () => {
       expect(callArgs.config.systemInstruction).toContain("커스텀 스타일 가이드입니다")
     })
 
+    it("카테고리에 맞는 실제 블로그 스타일 참고가 systemInstruction에 포함된다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft({ ...mockPost, category: "맛집" })
+
+      const callArgs = generateContentMock.mock.calls[0][0]
+      expect(callArgs.config.systemInstruction).toContain("욤뇸뇸일지")
+    })
+
+    it("카테고리별로 서로 다른 스타일 참고가 들어간다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValue({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft({ ...mockPost, category: "결혼" })
+      expect(generateContentMock.mock.calls[0][0].config.systemInstruction).toContain(
+        "결혼일지"
+      )
+
+      await generateNaverDraft({ ...mockPost, category: "알수없는카테고리" })
+      expect(generateContentMock.mock.calls[1][0].config.systemInstruction).not.toContain(
+        "카테고리별 글 구성 참고"
+      )
+    })
+
     it("응답에 텍스트가 없으면 에러를 던진다", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({ text: undefined })
@@ -207,8 +232,9 @@ describe("llm", () => {
       await vi.runAllTimersAsync()
       await assertion
 
-      // 최초 시도 + GEMINI_RATE_LIMIT.MAX_RETRIES(3) 재시도 = 총 4회 호출
-      expect(generateContentMock).toHaveBeenCalledTimes(4)
+      // 모델마다 최초 시도 + GEMINI_RATE_LIMIT.MAX_RETRIES(3) 재시도 = 4회,
+      // 모든 모델이 계속 429면 체인 전체를 소진하고 마지막 에러를 전파한다.
+      expect(generateContentMock).toHaveBeenCalledTimes(4 * MODEL_FALLBACK_CHAIN.length)
       vi.useRealTimers()
     })
 
@@ -227,6 +253,41 @@ describe("llm", () => {
       expect(result).toBe("재시도 후 생성된 초안")
       expect(generateContentMock).toHaveBeenCalledTimes(2)
       vi.useRealTimers()
+    })
+
+    it("첫 모델이 재시도 끝에 계속 429면 다음 모델로 자동 전환해 초안을 생성한다", async () => {
+      vi.useFakeTimers()
+      process.env.LLM_API_KEY = "test-key"
+      const { ApiError } = await import("@google/genai")
+      generateContentMock
+        .mockRejectedValueOnce(new ApiError({ message: "Too Many Requests", status: 429 }))
+        .mockRejectedValueOnce(new ApiError({ message: "Too Many Requests", status: 429 }))
+        .mockRejectedValueOnce(new ApiError({ message: "Too Many Requests", status: 429 }))
+        .mockRejectedValueOnce(new ApiError({ message: "Too Many Requests", status: 429 }))
+        .mockResolvedValueOnce({ text: "두 번째 모델이 생성한 초안" })
+
+      const promise = generateNaverDraft(mockPost)
+      await vi.runAllTimersAsync()
+      const result = await promise
+
+      expect(result).toBe("두 번째 모델이 생성한 초안")
+      // 첫 모델: 최초 시도 + 재시도 3회 = 4회, 두 번째 모델: 1회 = 총 5회
+      expect(generateContentMock).toHaveBeenCalledTimes(5)
+      expect(generateContentMock.mock.calls[4][0].model).toBe(MODEL_FALLBACK_CHAIN[1])
+    })
+
+    it("첫 모델이 404(미지원)면 재시도 없이 즉시 다음 모델로 전환한다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      const { ApiError } = await import("@google/genai")
+      generateContentMock
+        .mockRejectedValueOnce(new ApiError({ message: "Not Found", status: 404 }))
+        .mockResolvedValueOnce({ text: "두 번째 모델이 생성한 초안" })
+
+      const result = await generateNaverDraft(mockPost)
+
+      expect(result).toBe("두 번째 모델이 생성한 초안")
+      // 404는 재시도하지 않으므로 첫 모델 1회 + 두 번째 모델 1회 = 총 2회
+      expect(generateContentMock).toHaveBeenCalledTimes(2)
     })
   })
 })

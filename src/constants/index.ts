@@ -46,5 +46,5 @@ export const DRAFT_STATUS: Record<DraftStatus, DraftStatus> = {
   '게시완료': '게시완료',
 } as const
 
-// 카테고리 기본값 (PRD 예시: 맛집, 육아, 결혼)
-export const DEFAULT_CATEGORIES = ['맛집', '육아', '결혼'] as const
+// 카테고리 기본값 (실제 블로그 blog.naver.com/zmfflsp의 5개 카테고리 기준)
+export const DEFAULT_CATEGORIES = ['맛집', '육아', '결혼', '나들이', '기타'] as const
