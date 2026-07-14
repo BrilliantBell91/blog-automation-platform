@@ -7,7 +7,8 @@ const NAVER_IMAGE_SEARCH_URL = "https://openapi.naver.com/v1/search/image"
 // 언론사/통신사 이미지 CDN + 유료 스톡 이미지 사이트. 워터마크·저작권 표시가 찍혀있거나
 // 타인의 저작물(뉴스 사진, 유료 스톡 사진)일 가능성이 높아 자동 첨부 대상에서 제외한다.
 const BLOCKED_IMAGE_DOMAINS = [
-  // 언론사/통신사
+  // 언론사/통신사 - 워터마크·저작권 표시가 찍혀있는 경우가 많아(실측 확인: 이데일리
+  // 워터마크가 찍힌 사진이 그대로 쓰인 사고) 도메인 단위로 원천 차단한다.
   "imgnews.naver.net",
   "imgnews.pstatic.net",
   "mimgnews.pstatic.net",
@@ -22,6 +23,18 @@ const BLOCKED_IMAGE_DOMAINS = [
   "img.donga.com",
   "img.hani.co.kr",
   "photo.mk.co.kr",
+  "img.edaily.co.kr",
+  "thumb.edaily.co.kr",
+  "image.news1.kr",
+  "image.nocutnews.co.kr",
+  "img.segye.com",
+  "image.kmib.co.kr",
+  "img.joongang.co.kr",
+  "image.heraldcorp.com",
+  "cdn.asiae.co.kr",
+  "img.etnews.com",
+  "image.newsis.com",
+  "photo.newsis.com",
   // 유료 스톡 이미지(워터마크 포함)
   "gettyimages.com",
   "shutterstock.com",

@@ -8,7 +8,7 @@ import {
 } from "./imageGen"
 import { searchRealImages } from "./imageSearch"
 import { searchNaverPlace } from "./naverLocalSearch"
-import { extractNaverPlaceId, fetchNaverPlaceDetail } from "./naverPlaceDetail"
+import { extractNaverPlaceId, fetchNaverPlaceDetail, fetchNaverPlacePhotos } from "./naverPlaceDetail"
 import { extractLinkLabel } from "./naverDraftParser"
 
 // 무료 티어 할당량은 모델별로 독립적으로 차감된다(실측 확인됨: gemini-3.5-flash가
@@ -317,16 +317,43 @@ function buildImageSearchQuery(cleanTitle: string, tags: string[], slotIndex: nu
   return `${cleanTitle} ${tags[slotIndex % tags.length]}`
 }
 
-// 부족한 이미지 개수를 채운다. 우선순위: (1) 실사 스타일 카테고리(나들이·맛집)는 슬롯마다
-// 다른 검색어로 네이버 이미지 검색을 해 실제 사진을 먼저 찾고, (2) 검색으로 못 채운
-// 나머지(또는 요약 스타일 카테고리 전체)는 AI로 생성한다.
+// 후보 목록에서 (아직 안 쓰인 것 중) 관련성 검증을 통과한 첫 후보를 찾는다. 슬롯당 검증
+// 시도 예산(remainingAttempts)을 다 쓰면 통과 못 해도 중단한다.
+async function pickVerifiedCandidate(
+  candidates: string[],
+  usedUrls: Set<string>,
+  description: string,
+  apiKey: string,
+  remainingAttempts: number
+): Promise<{ pick: string | null; attemptsUsed: number }> {
+  let attemptsUsed = 0
+  for (const candidate of candidates) {
+    if (usedUrls.has(candidate)) continue
+    if (attemptsUsed >= remainingAttempts) break
+    attemptsUsed++
+    const relevance = await verifyImageRelevance(apiKey, candidate, description)
+    if (relevance === "unknown") {
+      console.warn(`[llm] 이미지 관련성 확인 불가(검증 모델 호출 실패) - 안전하게 건너뜀: ${candidate}`)
+    }
+    if (relevance === "relevant") return { pick: candidate, attemptsUsed }
+  }
+  return { pick: null, attemptsUsed }
+}
+
+// 부족한 이미지 개수를 채운다. 우선순위: (1) 실사 스타일 카테고리(나들이·맛집)는 첨부된
+// 지도 URL의 place ID로 그 장소의 실제 사진(업체 등록/방문자 인증 사진)을 먼저 찾고,
+// (2) 그걸로 못 채우면 슬롯마다 다른 검색어로 네이버 이미지 검색을 하고, (3) 그래도
+// 못 채운 나머지(또는 요약 스타일 카테고리 전체)는 AI로 생성한다. place ID 기반 사진은
+// 첨부 링크가 가리키는 바로 그 장소의 사진이라 검색과 달리 다른 장소 사진이 섞일 일이
+// 없다(실측 확인된 문제 - 이자카야 글에 검색으로 찾은 무관한 피자 사진이 쓰인 사고).
 async function resolveShortfallImages(
   points: number[],
   paragraphs: string[],
   postTitle: string,
   tags: string[],
   apiKey: string,
-  style: IllustrativeImageStyle
+  style: IllustrativeImageStyle,
+  placeId: string | null
 ): Promise<(string | null)[]> {
   if (style !== "photo") {
     return Promise.all(
@@ -335,35 +362,42 @@ async function resolveShortfallImages(
   }
 
   const cleanTitle = cleanTitleForSearch(postTitle)
-  // 슬롯마다 후보를 여러 장 받아온 뒤, (1) 앞 슬롯에서 이미 고른 이미지는 건너뛰고
-  // (2) 비전 모델로 그 문단 내용과 실제로 관련 있는지 검증해 통과한 첫 후보만 쓴다.
-  // 유명하지 않은 가게일수록 검색 결과에 전혀 무관한 사진이 섞여 나오는 걸 실측으로
-  // 확인해서, 관련성 검증 없이는 신뢰할 수 없다고 판단함. 비용을 고려해 슬롯당 검증
-  // 시도는 최대 3장으로 제한하고, 통과하는 후보가 없으면 AI 생성으로 폴백한다.
-  // 단, 검증 모델 자체가 할당량 소진 등으로 응답을 못 준 경우("unknown")는 "무관함"과
-  // 다르게 취급한다 — 이미 슬롯별 제목+태그로 타겟팅된 검색 결과라 신뢰도가 있는데도,
-  // Gemini 할당량이 소진된 날은 모든 후보가 검증 실패로 버려져 실사 검색이 무력화되고
-  // 매번 AI 생성으로만 몰리는 문제가 실측으로 확인되어 완화한 것이다.
+  const placePhotos = placeId ? await fetchNaverPlacePhotos(placeId, points.length * 3) : []
+
+  // 슬롯마다 (1) 첨부 지도 URL의 place 사진, (2) 검색 결과 순으로 후보를 시도한다. 앞
+  // 슬롯에서 이미 고른 이미지는 건너뛰고, 비전 모델로 그 문단 내용과 실제로 관련 있는지,
+  // 그리고 특정 인물이 주요 피사체이거나 상호명·광고 문구·워터마크 등 텍스트가 박혀 있지는
+  // 않은지 검증해 통과한 첫 후보만 쓴다. 유명하지 않은 가게일수록 검색 결과에 무관한
+  // 사진이 섞여 나오고, 타인의 개인 사진이나 대여점 광고 이미지가 그대로 쓰이는 사고가
+  // 실측으로 확인되어, 검증 없이는(모델 호출 자체가 실패해 답을 못 받은 "unknown" 포함)
+  // 신뢰할 수 없다고 판단해 후보를 사용하지 않는다. 비용을 고려해 슬롯당 검증 시도는
+  // 최대 3장(place+검색 합산)으로 제한하고, 통과하는 후보가 없으면 AI 생성으로 폴백한다.
   const MAX_VERIFY_ATTEMPTS_PER_SLOT = 3
   const usedUrls = new Set<string>()
   const results: (string | null)[] = []
   for (let i = 0; i < points.length; i++) {
     const description = paragraphs[points[i]].slice(0, 60)
-    const candidates = await searchRealImages(buildImageSearchQuery(cleanTitle, tags, i), 5)
 
-    let pick: string | null = null
-    let attempts = 0
-    for (const candidate of candidates) {
-      if (usedUrls.has(candidate)) continue
-      if (attempts >= MAX_VERIFY_ATTEMPTS_PER_SLOT) break
-      attempts++
-      const relevance = await verifyImageRelevance(apiKey, candidate, description)
-      if (relevance === "irrelevant") continue
-      if (relevance === "unknown") {
-        console.warn(`[llm] 이미지 관련성 확인 불가(검증 모델 호출 실패) - 검증 없이 사용: ${candidate}`)
-      }
-      pick = candidate
-      break
+    const fromPlace = await pickVerifiedCandidate(
+      placePhotos,
+      usedUrls,
+      description,
+      apiKey,
+      MAX_VERIFY_ATTEMPTS_PER_SLOT
+    )
+    let pick = fromPlace.pick
+    const remaining = MAX_VERIFY_ATTEMPTS_PER_SLOT - fromPlace.attemptsUsed
+
+    if (!pick && remaining > 0) {
+      const searchCandidates = await searchRealImages(buildImageSearchQuery(cleanTitle, tags, i), 5)
+      const fromSearch = await pickVerifiedCandidate(
+        searchCandidates,
+        usedUrls,
+        description,
+        apiKey,
+        remaining
+      )
+      pick = fromSearch.pick
     }
 
     if (pick) usedUrls.add(pick)
@@ -406,11 +440,24 @@ async function insertImages(text: string, apiKey: string, post: Post): Promise<s
   const points = selectImageInsertionPoints(paragraphs, totalSlots)
   if (points.length === 0) return text
 
+  const mapLink = (post.contentAttachments ?? []).find(
+    (a) => a.kind === "link" && isNaverMapUrl(a.url)
+  )
+  const placeId = mapLink ? extractNaverPlaceId(mapLink.url) : null
+
   // 앞쪽 자리는 사용자 첨부 사진, 나머지 자리만 검색/생성으로 채운다.
   const shortfallPoints = points.slice(attachments.length)
   const shortfallImages =
     shortfallPoints.length > 0
-      ? await resolveShortfallImages(shortfallPoints, paragraphs, post.title, post.tags, apiKey, style)
+      ? await resolveShortfallImages(
+          shortfallPoints,
+          paragraphs,
+          post.title,
+          post.tags,
+          apiKey,
+          style,
+          placeId
+        )
       : []
 
   // 첨부 사진의 캡션으로 Notion 파일명(예: "20180206_195520.jpg")이 그대로 화면에 노출되던

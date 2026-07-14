@@ -26,20 +26,13 @@ export function extractNaverPlaceId(url: string): string | null {
   return match ? match[1] : null
 }
 
-// 페이지에는 이 place와 무관한 다른 POI들의 캐시 객체(주변 시설, 추천 장소 등)도 함께
-// 들어있어서, 필드명만 보고 페이지 전체에서 첫 매치를 가져오면 완전히 다른 업체의 값을
-// 가져오는 사고가 실측으로 확인됐다(예: place ID가 "에버랜드"인데 페이지 앞쪽에 있던
-// 무관한 "PoiInfoShapeKey" 객체의 name:"RELA"가 먼저 매치되어 상호명이 뒤바뀜).
-// 반드시 이 place ID의 "PlaceDetailBase:{id}" 객체 범위 안에서만 값을 찾아야 한다.
-function extractPlaceDetailBaseJson(html: string, placeId: string): string | null {
-  const anchor = `"PlaceDetailBase:${placeId}":{`
-  const start = html.indexOf(anchor)
-  if (start === -1) return null
-
+// 페이지 내 특정 위치(startBrace가 가리키는 "{")부터 중괄호 균형을 맞춰 JSON 객체 하나의
+// 범위를 잘라낸다. 문자열 리터럴 안의 중괄호는 무시한다.
+function extractBalancedJsonAt(html: string, startBrace: number): string | null {
   let depth = 0
   let inString = false
   let escaped = false
-  for (let i = start + anchor.length - 1; i < html.length; i++) {
+  for (let i = startBrace; i < html.length; i++) {
     const ch = html[i]
     if (escaped) {
       escaped = false
@@ -57,15 +50,51 @@ function extractPlaceDetailBaseJson(html: string, placeId: string): string | nul
     if (ch === "{") depth++
     else if (ch === "}") {
       depth--
-      if (depth === 0) return html.slice(start, i + 1)
+      if (depth === 0) return html.slice(startBrace, i + 1)
     }
   }
   return null
 }
 
+// 페이지에는 이 place와 무관한 다른 POI들의 캐시 객체(주변 시설, 추천 장소 등)도 함께
+// 들어있어서, 필드명만 보고 페이지 전체에서 첫 매치를 가져오면 완전히 다른 업체의 값을
+// 가져오는 사고가 실측으로 확인됐다(예: place ID가 "에버랜드"인데 페이지 앞쪽에 있던
+// 무관한 "PoiInfoShapeKey" 객체의 name:"RELA"가 먼저 매치되어 상호명이 뒤바뀜).
+// 반드시 이 place ID의 "PlaceDetailBase:{id}" 객체 범위 안에서만 값을 찾아야 한다.
+function extractPlaceDetailBaseJson(html: string, placeId: string): string | null {
+  const anchor = `"PlaceDetailBase:${placeId}":{`
+  const start = html.indexOf(anchor)
+  if (start === -1) return null
+  return extractBalancedJsonAt(html, start + anchor.length - 1)
+}
+
+// "PlaceDetailTopPhotoItem:visitor_1":{...}, "PlaceDetailTopPhotoItem:business_1":{...} 같은
+// 사진 캐시 객체를 전부 찾아 각각의 JSON 범위를 잘라낸다.
+function extractAllObjectsByPrefix(html: string, keyPrefix: string): string[] {
+  const results: string[] = []
+  const anchorPattern = new RegExp(`"${keyPrefix}:[^"]+"\\s*:\\s*\\{`, "g")
+  let anchorMatch: RegExpExecArray | null
+  while ((anchorMatch = anchorPattern.exec(html)) !== null) {
+    const start = anchorMatch.index + anchorMatch[0].length - 1
+    const obj = extractBalancedJsonAt(html, start)
+    if (obj) results.push(obj)
+  }
+  return results
+}
+
 function extractField(json: string, key: string): string | undefined {
   const match = json.match(new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`))
   return match?.[1] || undefined
+}
+
+// 페이지 안 문자열은 JS 유니코드 이스케이프(슬래시가 6자리 코드로 인코딩됨)가 그대로
+// 남아있는 채로 내려오므로, 실제 URL로 쓰기 전에 JSON 문자열 파싱으로 정식 디코딩한다.
+function decodeJsonString(raw: string): string {
+  try {
+    return JSON.parse(`"${raw}"`)
+  } catch {
+    return raw
+  }
 }
 
 // 영업시간은 "day"(예: "매일")와 시작/종료 시각, 라스트오더 시각이 별도 필드로 나뉘어
@@ -142,5 +171,40 @@ export async function fetchNaverPlaceDetail(placeId: string): Promise<NaverPlace
   } catch (error) {
     console.warn("[naverPlaceDetail] 조회 실패", error)
     return null
+  }
+}
+
+/**
+ * place ID의 실제 사진(업체 등록 사진 + 방문자 인증 사진)을 가져온다. 첨부된 지도 URL이
+ * 가리키는 바로 그 장소의 사진이라, 제목/태그로 검색하는 방식과 달리 완전히 다른 장소의
+ * 사진이 섞여 들어올 일이 없다(실측 확인된 문제 - 이자카야 글에 검색으로 찾은 무관한
+ * 피자 사진이 쓰인 사고). 업체가 직접 올린 "business" 사진을 우선하고, 부족하면 방문자
+ * 사진("visitor")으로 채운다. 사진이 하나도 없거나 요청이 실패하면 빈 배열을 반환해
+ * 호출부가 기존 키워드 검색으로 폴백하도록 한다.
+ */
+export async function fetchNaverPlacePhotos(placeId: string, count: number): Promise<string[]> {
+  if (count <= 0) return []
+  try {
+    const res = await fetch(`https://m.place.naver.com/place/${placeId}/home`, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+      },
+    })
+    if (!res.ok) return []
+
+    const html = await res.text()
+    const photoObjects = extractAllObjectsByPrefix(html, "PlaceDetailTopPhotoItem")
+    const photos = photoObjects
+      .map((obj) => ({ origin: extractField(obj, "origin"), type: extractField(obj, "type") }))
+      .filter((p): p is { origin: string; type: string } => Boolean(p.origin))
+
+    const business = photos.filter((p) => p.type === "business").map((p) => decodeJsonString(p.origin))
+    const visitor = photos.filter((p) => p.type === "visitor").map((p) => decodeJsonString(p.origin))
+
+    return [...business, ...visitor].slice(0, count)
+  } catch (error) {
+    console.warn("[naverPlaceDetail] 플레이스 사진 조회 실패", error)
+    return []
   }
 }

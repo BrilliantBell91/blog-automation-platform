@@ -8,12 +8,14 @@ const {
   verifyImageRelevanceMock,
   searchNaverPlaceMock,
   fetchNaverPlaceDetailMock,
+  fetchNaverPlacePhotosMock,
   fetchMock,
 } = vi.hoisted(() => ({
   searchRealImagesMock: vi.fn().mockResolvedValue([]),
   verifyImageRelevanceMock: vi.fn().mockResolvedValue("relevant"),
   searchNaverPlaceMock: vi.fn().mockResolvedValue(null),
   fetchNaverPlaceDetailMock: vi.fn().mockResolvedValue(null),
+  fetchNaverPlacePhotosMock: vi.fn().mockResolvedValue([]),
   // Pollinations 이미지 생성(imageGen.ts)이 전역 fetch를 직접 호출한다. 실제 네트워크를
   // 타지 않도록 항상 실패시켜 기존 테스트가 기대하는 Gemini 폴백 경로로 넘어가게 한다.
   fetchMock: vi.fn().mockResolvedValue({ ok: false }),
@@ -29,12 +31,14 @@ vi.mock("./naverLocalSearch", () => ({
   searchNaverPlace: searchNaverPlaceMock,
 }))
 
-// extractNaverPlaceId는 실제 구현(순수 정규식 파싱)을 그대로 쓰고, fetchNaverPlaceDetail만 목으로 제어한다.
+// extractNaverPlaceId는 실제 구현(순수 정규식 파싱)을 그대로 쓰고, fetchNaverPlaceDetail/
+// fetchNaverPlacePhotos(둘 다 실제 네트워크 호출)만 목으로 제어한다.
 vi.mock("./naverPlaceDetail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./naverPlaceDetail")>()
   return {
     ...actual,
     fetchNaverPlaceDetail: fetchNaverPlaceDetailMock,
+    fetchNaverPlacePhotos: fetchNaverPlacePhotosMock,
   }
 })
 
@@ -105,6 +109,7 @@ describe("llm", () => {
     verifyImageRelevanceMock.mockReset().mockResolvedValue("relevant")
     searchNaverPlaceMock.mockReset().mockResolvedValue(null)
     fetchNaverPlaceDetailMock.mockReset().mockResolvedValue(null)
+    fetchNaverPlacePhotosMock.mockReset().mockResolvedValue([])
     fetchMock.mockReset().mockResolvedValue({ ok: false })
   })
 
@@ -571,6 +576,29 @@ describe("llm", () => {
       expect(searchRealImagesMock).toHaveBeenNthCalledWith(2, "테스트 포스트 카페", 5)
     })
 
+    it("첨부 지도 URL에 place ID가 있으면 키워드 검색보다 그 장소의 실제 사진을 먼저 쓴다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      fetchNaverPlacePhotosMock.mockResolvedValueOnce([
+        "https://ldb-phinf.pstatic.net/place-photo-1.jpg",
+      ])
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+      })
+
+      const result = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "link", url: "https://map.naver.com/p/search/잇키/place/1370160067" },
+        ],
+      })
+
+      expect(fetchNaverPlacePhotosMock).toHaveBeenCalledWith("1370160067", expect.any(Number))
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://ldb-phinf.pstatic.net/place-photo-1.jpg]"
+      )
+      expect(searchRealImagesMock).not.toHaveBeenCalled() // place 사진으로 채워졌으니 키워드 검색은 하지 않음
+    })
+
     it("앞 슬롯에서 이미 고른 이미지는 다음 슬롯에서 재사용하지 않는다", async () => {
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock
@@ -619,20 +647,27 @@ describe("llm", () => {
       expect(generateContentMock).toHaveBeenCalledTimes(1) // AI 생성으로 폴백하지 않음
     })
 
-    it("검증 모델 호출 자체가 실패(unknown)하면 무관 판정과 다르게 후보를 그대로 사용한다", async () => {
+    it("검증 모델 호출 자체가 실패(unknown)하면 무관 판정과 동일하게 후보를 건너뛰고 AI 생성으로 폴백한다", async () => {
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock.mockResolvedValueOnce(["https://search.example.com/unverified.jpg"])
       verifyImageRelevanceMock.mockResolvedValueOnce("unknown") // 검증 모델 할당량 소진 등
-      generateContentMock.mockResolvedValueOnce({
-        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
-      })
+      generateContentMock
+        .mockResolvedValueOnce({
+          text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+        })
+        .mockResolvedValueOnce({
+          candidates: [
+            { content: { parts: [{ inlineData: { data: "IMG1", mimeType: "image/png" } }] } },
+          ],
+        })
 
       const result = await generateNaverDraft(mockPost)
 
+      expect(result).not.toContain("unverified.jpg")
       expect(result).toContain(
-        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/unverified.jpg]"
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]"
       )
-      expect(generateContentMock).toHaveBeenCalledTimes(1) // AI 생성으로 폴백하지 않음
+      expect(generateContentMock).toHaveBeenCalledTimes(2) // 텍스트 생성 + AI 이미지 생성 폴백
     })
 
     it("슬롯당 검증 시도가 3회를 넘으면 AI 생성으로 폴백한다", async () => {

@@ -21,7 +21,25 @@ describe("imageGen", () => {
   })
 
   describe("generateAiImage", () => {
-    it("Pollinations 응답이 성공(이미지 content-type)하면 해당 URL을 그대로 반환한다", async () => {
+    it("Gemini 응답이 성공하면 해당 data URI를 그대로 반환한다 (Pollinations 호출 안 함)", async () => {
+      generateContentMock.mockResolvedValueOnce({
+        candidates: [
+          {
+            content: {
+              parts: [{ inlineData: { data: "base64data", mimeType: "image/png" } }],
+            },
+          },
+        ],
+      })
+
+      const result = await generateAiImage("test-key", "설명", "photo")
+
+      expect(result).toBe("data:image/png;base64,base64data")
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it("Gemini 응답이 실패(예외)하면 Pollinations로 폴백한다", async () => {
+      generateContentMock.mockRejectedValueOnce(new Error("quota exceeded"))
       fetchMock.mockResolvedValueOnce({
         ok: true,
         headers: { get: () => "image/jpeg" },
@@ -30,67 +48,38 @@ describe("imageGen", () => {
       const result = await generateAiImage("test-key", "설명", "photo")
 
       expect(result).toMatch(/^https:\/\/image\.pollinations\.ai\/prompt\//)
-      expect(generateContentMock).not.toHaveBeenCalled()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
     })
 
-    it("Pollinations 응답이 실패(ok: false)하면 Gemini로 폴백한다", async () => {
-      fetchMock.mockResolvedValueOnce({ ok: false })
+    it("Gemini가 이미지 파트 없는 응답을 반환하면 Pollinations로 폴백한다", async () => {
       generateContentMock.mockResolvedValueOnce({
-        candidates: [
-          {
-            content: {
-              parts: [{ inlineData: { data: "base64data", mimeType: "image/png" } }],
-            },
-          },
-        ],
+        candidates: [{ content: { parts: [] } }],
       })
-
-      const result = await generateAiImage("test-key", "설명", "photo")
-
-      expect(result).toBe("data:image/png;base64,base64data")
-      expect(generateContentMock).toHaveBeenCalledTimes(1)
-    })
-
-    it("Pollinations가 이미지가 아닌 content-type을 반환하면 Gemini로 폴백한다", async () => {
       fetchMock.mockResolvedValueOnce({
         ok: true,
-        headers: { get: () => "text/html" },
-      })
-      generateContentMock.mockResolvedValueOnce({
-        candidates: [
-          {
-            content: {
-              parts: [{ inlineData: { data: "base64data", mimeType: "image/png" } }],
-            },
-          },
-        ],
+        headers: { get: () => "image/jpeg" },
       })
 
       const result = await generateAiImage("test-key", "설명", "photo")
 
-      expect(result).toBe("data:image/png;base64,base64data")
+      expect(result).toMatch(/^https:\/\/image\.pollinations\.ai\/prompt\//)
     })
 
-    it("Pollinations가 네트워크 오류를 던져도 Gemini로 폴백한다", async () => {
-      fetchMock.mockRejectedValueOnce(new Error("network error"))
-      generateContentMock.mockResolvedValueOnce({
-        candidates: [
-          {
-            content: {
-              parts: [{ inlineData: { data: "base64data", mimeType: "image/png" } }],
-            },
-          },
-        ],
+    it("Gemini 호출 자체가 실패(네트워크 등)해도 Pollinations로 폴백한다", async () => {
+      generateContentMock.mockRejectedValueOnce(new Error("network error"))
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => "image/jpeg" },
       })
 
       const result = await generateAiImage("test-key", "설명", "summary")
 
-      expect(result).toBe("data:image/png;base64,base64data")
+      expect(result).toMatch(/^https:\/\/image\.pollinations\.ai\/prompt\//)
     })
 
-    it("Pollinations와 Gemini 모두 실패하면 null을 반환한다", async () => {
-      fetchMock.mockResolvedValueOnce({ ok: false })
+    it("Gemini와 Pollinations 모두 실패하면 null을 반환한다", async () => {
       generateContentMock.mockRejectedValueOnce(new Error("quota exceeded"))
+      fetchMock.mockResolvedValueOnce({ ok: false })
 
       const result = await generateAiImage("test-key", "설명", "photo")
 

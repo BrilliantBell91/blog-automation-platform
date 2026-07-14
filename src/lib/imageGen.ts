@@ -6,8 +6,9 @@ import { GoogleGenAI } from "@google/genai"
 
 const IMAGE_MODEL = "gemini-2.5-flash-image"
 
-// Gemini 이미지 생성이 무료 티어 한도(quota)에 자주 걸려서, 키가 필요 없는 무료
-// 서비스인 Pollinations.ai(flux 모델)를 1차로 시도하고, 실패할 때만 Gemini로 폴백한다.
+// Gemini 이미지 생성이 무료 티어 한도(quota)에 자주 걸리지만, 더 좋은 품질의 결과가 나오므로
+// Gemini를 1차로 시도한다. Gemini가 실패할 때만 키가 필요 없는 무료 서비스인
+// Pollinations.ai(flux 모델)로 폴백한다.
 const POLLINATIONS_BASE_URL = "https://image.pollinations.ai/prompt"
 const POLLINATIONS_MODEL = "flux"
 const POLLINATIONS_TIMEOUT_MS = 20_000
@@ -54,8 +55,8 @@ async function generateImageWithPollinations(
 }
 
 /**
- * 장면 설명을 받아 이미지를 생성한다. Pollinations(무료, 키 불필요)를 우선
- * 시도하고 실패하면 Gemini로 폴백한다. resolveShortfallImages()의 실질적인
+ * 장면 설명을 받아 이미지를 생성한다. Gemini를 우선 시도하고 실패하면
+ * Pollinations(무료, 키 불필요)로 폴백한다. resolveShortfallImages()의 실질적인
  * 진입점.
  */
 export async function generateAiImage(
@@ -63,9 +64,9 @@ export async function generateAiImage(
   description: string,
   style: IllustrativeImageStyle = "photo"
 ): Promise<string | null> {
-  const pollinationsImage = await generateImageWithPollinations(description, style)
-  if (pollinationsImage) return pollinationsImage
-  return generateIllustrativeImage(apiKey, description, style)
+  const geminImage = await generateIllustrativeImage(apiKey, description, style)
+  if (geminImage) return geminImage
+  return generateImageWithPollinations(description, style)
 }
 
 /**
@@ -109,9 +110,11 @@ ${buildStyleInstruction(style)}
 // 곳일수록 무관한 사진이 섞여 나옴), 비전 모델로 본문 설명과 실제로 관련 있는지 검증한다.
 const VERIFY_MODEL = "gemini-3-flash-preview"
 
-// "irrelevant"는 모델이 실제로 "무관하다"고 답한 경우, "unknown"은 검증 자체(할당량
-// 소진 등)가 실패해 답을 못 받은 경우다. 이 둘을 구분해야 Gemini 할당량이 소진됐다고
-// 검색 후보를 전부 버리고 AI 생성으로만 몰리는 것을 막을 수 있다(실측 확인된 문제).
+// "irrelevant"는 모델이 실제로 "무관하다/부적절하다"고 답한 경우, "unknown"은 검증
+// 자체(할당량 소진 등)가 실패해 답을 못 받은 경우다. 후보에 특정 인물이 주요 피사체로
+// 나오거나 상호명·광고 문구 같은 텍스트가 박혀 있으면 안 된다는 요건이 있어(실측
+// 확인된 문제 - 타인의 개인 사진, 대여점 광고 이미지가 그대로 쓰인 사고), 검증을 못 한
+// "unknown"도 호출부에서 "irrelevant"와 동일하게 건너뛴다. 로그에서만 원인을 구분한다.
 export type ImageRelevanceResult = "relevant" | "irrelevant" | "unknown"
 
 export async function verifyImageRelevance(
@@ -141,7 +144,7 @@ export async function verifyImageRelevance(
           parts: [
             { inlineData: { mimeType, data: base64 } },
             {
-              text: `이 사진이 아래 설명과 실제로 관련 있는 사진입니까?\n설명: "${description}"\n관련 있으면 정확히 "예"만, 관련 없으면 정확히 "아니오"만 답하세요.`,
+              text: `이 사진을 블로그 본문에 그대로 사용해도 되는지 판단해주세요.\n설명: "${description}"\n다음 중 하나라도 해당하면 반드시 "아니오"라고만 답하세요:\n(1) 특정 인물(얼굴이나 전신)이 사진의 주요 피사체로 나옴\n(2) 사진 안에 상호명·광고 문구·워터마크 등 글자가 삽입되어 있음\n(3) 설명과 실제로 무관함\n위 세 가지에 모두 해당하지 않고 설명과 실제로 관련 있으면 정확히 "예"만 답하세요.`,
             },
           ],
         },

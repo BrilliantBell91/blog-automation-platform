@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
-import { extractNaverPlaceId, fetchNaverPlaceDetail } from "./naverPlaceDetail"
+import { extractNaverPlaceId, fetchNaverPlaceDetail, fetchNaverPlacePhotos } from "./naverPlaceDetail"
 
 describe("extractNaverPlaceId", () => {
   it("URL 경로에서 place ID를 추출한다", () => {
@@ -118,5 +118,79 @@ describe("fetchNaverPlaceDetail", () => {
     const result = await fetchNaverPlaceDetail("1370160067")
 
     expect(result).toBeNull()
+  })
+})
+
+describe("fetchNaverPlacePhotos", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  // 첨부된 지도 URL이 가리키는 그 장소의 실제 사진(업체 등록 + 방문자 인증)만 가져와야
+  // 키워드 검색처럼 완전히 다른 장소 사진이 섞이지 않는다(실측 확인된 사고 - 이자카야
+  // 글에 무관한 피자 사진이 검색으로 섞여 들어옴).
+  it("업체 등록 사진을 방문자 사진보다 먼저 반환하고, 유니코드 이스케이프된 URL을 디코딩한다", async () => {
+    const html = `<script>window.__APOLLO_STATE__ = {
+      "PlaceDetailTopPhotoItem:visitor_1":{"__typename":"PlaceDetailTopPhotoItem","id":"visitor_1","origin":"https:\\u002F\\u002Fblogfiles.pstatic.net\\u002Fvisitor1.jpg","type":"visitor","photoType":"visitor"},
+      "PlaceDetailTopPhotoItem:business_1":{"__typename":"PlaceDetailTopPhotoItem","id":"business_1","origin":"https:\\u002F\\u002Fldb-phinf.pstatic.net\\u002Fbusiness1.jpg","type":"business","photoType":"business"}
+    }</script>`
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => html }))
+
+    const result = await fetchNaverPlacePhotos("1370160067", 5)
+
+    expect(result).toEqual([
+      "https://ldb-phinf.pstatic.net/business1.jpg",
+      "https://blogfiles.pstatic.net/visitor1.jpg",
+    ])
+  })
+
+  it("count만큼만 반환한다", async () => {
+    const html = `<script>window.__APOLLO_STATE__ = {
+      "PlaceDetailTopPhotoItem:visitor_1":{"origin":"https:\\u002F\\u002Fexample.com\\u002F1.jpg","type":"visitor"},
+      "PlaceDetailTopPhotoItem:visitor_2":{"origin":"https:\\u002F\\u002Fexample.com\\u002F2.jpg","type":"visitor"},
+      "PlaceDetailTopPhotoItem:visitor_3":{"origin":"https:\\u002F\\u002Fexample.com\\u002F3.jpg","type":"visitor"}
+    }</script>`
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => html }))
+
+    const result = await fetchNaverPlacePhotos("1370160067", 2)
+
+    expect(result).toHaveLength(2)
+  })
+
+  it("count가 0 이하면 요청 없이 빈 배열을 반환한다", async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal("fetch", fetchSpy)
+
+    const result = await fetchNaverPlacePhotos("1370160067", 0)
+
+    expect(result).toEqual([])
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("사진 객체가 없으면 빈 배열을 반환한다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, text: async () => "<script>{}</script>" })
+    )
+
+    const result = await fetchNaverPlacePhotos("1370160067", 5)
+
+    expect(result).toEqual([])
+  })
+
+  it("응답 실패 시 빈 배열을 반환한다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }))
+
+    const result = await fetchNaverPlacePhotos("1370160067", 5)
+
+    expect(result).toEqual([])
+  })
+
+  it("fetch 자체가 실패해도 빈 배열을 반환한다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network error")))
+
+    const result = await fetchNaverPlacePhotos("1370160067", 5)
+
+    expect(result).toEqual([])
   })
 })
