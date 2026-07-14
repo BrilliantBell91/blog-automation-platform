@@ -128,22 +128,23 @@ describe("llm", () => {
       expect(callArgs.contents).toContain("숙성회, 오션뷰")
     })
 
-    it("contentAttachments가 있으면 사진/링크 마커가 사용자 메시지에 들어간다", async () => {
+    it("링크 첨부는 마커로 사용자 메시지에 들어가지만, 사진 첨부는 URL 마커 없이 캡션 힌트만 들어간다", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
 
       await generateNaverDraft({
         ...mockPost,
         contentAttachments: [
-          { kind: "image", url: "https://s3.example.com/photo.jpg" },
+          { kind: "image", url: "https://s3.example.com/photo.jpg", label: "가게 전경" },
           { kind: "link", url: "https://map.naver.com/p/place/123" },
         ],
       })
 
       const callArgs = generateContentMock.mock.calls[0][0]
-      expect(callArgs.contents).toContain(
-        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://s3.example.com/photo.jpg]"
-      )
+      // 사진 URL은 LLM이 보지 못하게 해서 마커 훼손(예: "📷첨부 사진"으로 임의 변경) 위험을 차단한다
+      expect(callArgs.contents).not.toContain("https://s3.example.com/photo.jpg")
+      expect(callArgs.contents).toContain("첨부된 사진 설명")
+      expect(callArgs.contents).toContain("가게 전경")
       expect(callArgs.contents).toContain(
         "[참고링크 - 지도/메뉴/리뷰 등 실제로 확인되는 내용만 반영: https://map.naver.com/p/place/123]"
       )
@@ -379,10 +380,10 @@ describe("llm", () => {
       expect(generateContentMock).toHaveBeenCalledTimes(3)
     })
 
-    it("카테고리 기준 개수만큼 이미 사진이 있으면 추가로 생성하지 않는다", async () => {
+    it("첨부 사진이 카테고리 기준 개수만큼 있으면 부족분 검색/생성 없이 첨부 사진만 프로그래밍적으로 삽입한다", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({
-        text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+        text: "안녕하세요.\n\n하나.\n\n둘.\n\n셋.\n\n넷.\n\n마무리 인사.",
       })
 
       const result = await generateNaverDraft({
@@ -395,8 +396,58 @@ describe("llm", () => {
         ],
       })
 
-      expect(result).toBe("안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.")
-      expect(generateContentMock).toHaveBeenCalledTimes(1)
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://example.com/1.jpg]"
+      )
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://example.com/2.jpg]"
+      )
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://example.com/3.jpg]"
+      )
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://example.com/4.jpg]"
+      )
+      expect(generateContentMock).toHaveBeenCalledTimes(1) // 텍스트 생성만, AI 이미지 생성 호출 없음
+      expect(searchRealImagesMock).not.toHaveBeenCalled() // 부족분이 없으니 검색도 하지 않음
+    })
+
+    it("첨부 사진에 캡션이 있으면 삽입되는 마커 뒤에 캡션이 그대로 붙는다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+      })
+
+      const result = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://example.com/1.jpg", label: "가게 전경" },
+        ],
+      })
+
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://example.com/1.jpg] 가게 전경"
+      )
+    })
+
+    it("첨부 사진이 카테고리 기준 개수보다 부족하면 첨부 사진을 먼저 배치하고 나머지만 검색/생성으로 채운다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock.mockResolvedValue(["https://search.example.com/real.jpg"])
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n하나.\n\n둘.\n\n마무리 인사.",
+      })
+
+      const result = await generateNaverDraft({
+        ...mockPost, // 맛집, aiImageCount 4 → 첨부 1장 + 부족분 3장 시도(문단 후보는 2개뿐)
+        contentAttachments: [{ kind: "image", url: "https://example.com/attached.jpg" }],
+      })
+
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://example.com/attached.jpg]"
+      )
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real.jpg]"
+      )
     })
 
     it("이미지 생성에 실패한 자리는 조용히 건너뛰고 나머지 텍스트는 그대로 유지한다", async () => {

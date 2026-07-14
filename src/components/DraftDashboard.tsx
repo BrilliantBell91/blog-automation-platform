@@ -3,7 +3,7 @@
 import { useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Loader2, MoreHorizontal, Eye, ExternalLink, RefreshCw } from "lucide-react"
+import { Loader2, Eye, ExternalLink, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import { Post, Draft, DraftStatus } from "@/types"
 import { formatDate } from "@/lib/formatters"
@@ -28,11 +28,12 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Tooltip,
   TooltipContent,
@@ -287,41 +288,26 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                             </TooltipTrigger>
                             <TooltipContent>초안 재생성</TooltipContent>
                           </Tooltip>
-                          <DropdownMenu>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-11 w-11"
-                                    aria-label="초안 상태 변경"
-                                  >
-                                    <MoreHorizontal
-                                      className="h-4 w-4"
-                                      aria-hidden="true"
-                                    />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                              </TooltipTrigger>
-                              <TooltipContent>초안 상태 변경</TooltipContent>
-                            </Tooltip>
-                            <DropdownMenuContent align="end">
+                          <Select
+                            value={draft.status}
+                            onValueChange={(status) =>
+                              handleStatusChange(draft.id, status as DraftStatus)
+                            }
+                          >
+                            <SelectTrigger
+                              className="h-11 w-[110px]"
+                              aria-label="초안 상태 변경"
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
                               {Object.keys(DRAFT_STATUS).map((status) => (
-                                <DropdownMenuItem
-                                  key={status}
-                                  onClick={() =>
-                                    handleStatusChange(
-                                      draft.id,
-                                      status as DraftStatus
-                                    )
-                                  }
-                                >
+                                <SelectItem key={status} value={status}>
                                   {status}
-                                </DropdownMenuItem>
+                                </SelectItem>
                               ))}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                            </SelectContent>
+                          </Select>
                         </div>
                       </TooltipProvider>
                     )}

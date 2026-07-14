@@ -158,9 +158,9 @@ function buildSystemPrompt(styleGuide?: string, category?: string): string {
 - 실제 블로그는 "#분위기", "#데이트" 같은 지나치게 일반적인 단독 태그보다 상호명·지역명·속성을 조합한 좁은 태그(예: #부평맥주집, #부평하이볼)를 주로 씁니다. 이 방식을 따르세요.
 - "필수 포함 해시태그"가 없으면, 위 스타일에 맞춰 전체 해시태그를 알아서 구성하세요.
 
-## 사진 마커 처리 규칙 (중요)
-- 본문에 \`[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: URL]\` 형태의 마커가 있으면, 이 마커는 절대 고치거나 지우지 말고 정확히 그 형태 그대로 유지하세요.
-- 마커에 캡션이 함께 있으면 그 캡션만 참고해서 짧게 언급해도 되지만, 사진 내용을 마음대로 상상해서 묘사하거나 없는 디테일을 지어내지 마세요.
+## 첨부 사진 처리 규칙 (중요)
+- 첨부된 사진의 실제 위치 배치는 시스템이 생성된 글을 후처리해서 자동으로 넣습니다. 당신은 사진 마커, "[사진]", "사진 첨부", 카메라 이모지 같은 어떤 형태의 placeholder도 절대 직접 만들어 쓰지 마세요.
+- "첨부된 사진 설명"이 주어지면 그 캡션 내용만 참고해서 본문 흐름 속에서 자연스럽게 한두 문장 언급해도 되지만, 사진 내용을 마음대로 상상해서 묘사하거나 없는 디테일을 지어내지 마세요.
 
 ## 키워드 및 링크 반영 규칙 (매우 중요, 사실 왜곡 금지)
 - "필수 포함 키워드"가 주어지면: 사용자가 직접 확인한 사실이므로, 각 키워드를 본문에 자연스럽게 반드시 포함하세요.
@@ -175,24 +175,38 @@ function buildSystemPrompt(styleGuide?: string, category?: string): string {
     : base
 }
 
-// 사진/링크 첨부(본문 블록 + "Content" 속성 유래 모두 포함)를 LLM이 인식할 수 있는
-// 마커 텍스트로 변환한다. Post.content(공개 사이트/DB용)와는 별개로 여기서만 조립한다.
-function formatAttachmentMarkers(attachments: LlmAttachment[]): string {
+// 링크 첨부만 LLM이 인식할 수 있는 마커 텍스트로 변환한다(url_context 툴로 실제 열어봐야
+// 하므로 URL 자체가 필요함). Post.content(공개 사이트/DB용)와는 별개로 여기서만 조립한다.
+// 사진 첨부는 LLM에게 URL 마커를 주지 않는다 — 모델이 마커 형식을 그대로 보존하지 않고
+// 임의로 바꿔써서(예: "[사진 원본...]" → "📷첨부 사진") 실제 이미지가 통째로 사라지는
+// 사고가 실측으로 확인되어, 사진은 텍스트 생성 후 insertImages()가 프로그래밍적으로 삽입한다.
+function formatLinkMarkers(attachments: LlmAttachment[]): string {
   return attachments
+    .filter((a) => a.kind === "link")
     .map((a) => {
       const label = a.label ? ` (${a.label})` : ""
-      return a.kind === "image"
-        ? `[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${a.url}]${label}`
-        : `[참고링크 - 지도/메뉴/리뷰 등 실제로 확인되는 내용만 반영: ${a.url}]${label}`
+      return `[참고링크 - 지도/메뉴/리뷰 등 실제로 확인되는 내용만 반영: ${a.url}]${label}`
     })
     .join("\n\n")
+}
+
+// 첨부된 사진의 캡션만 참고 정보로 전달한다(URL은 주지 않음 - 자연스러운 언급용).
+function formatImageAttachmentHints(attachments: LlmAttachment[]): string {
+  const captions = attachments
+    .filter((a): a is LlmAttachment & { label: string } => a.kind === "image" && Boolean(a.label))
+    .map((a, i) => `${i + 1}. ${a.label}`)
+
+  if (captions.length === 0) return ""
+  return `\n\n첨부된 사진 설명 (참고용 - 사진 위치는 시스템이 자동 배치하니 마커는 쓰지 말고, 자연스러운 언급에만 활용):\n${captions.join("\n")}`
 }
 
 /**
  * 사용자 메시지 구성
  */
 function buildUserMessage(post: Post): string {
-  const attachmentsText = formatAttachmentMarkers(post.contentAttachments ?? [])
+  const attachments = post.contentAttachments ?? []
+  const linkMarkersText = formatLinkMarkers(attachments)
+  const imageHintsText = formatImageAttachmentHints(attachments)
   const keywords = post.keywords ?? []
   const keywordsText = keywords.length
     ? `\n\n필수 포함 키워드 (사용자가 직접 확인한 사실 - 반드시 자연스럽게 포함): ${keywords.join(", ")}`
@@ -208,7 +222,7 @@ function buildUserMessage(post: Post): string {
 필수 포함 해시태그: ${tagsText}
 
 본문:
-${post.content || "(본문 텍스트 없음 - 아래 첨부 정보를 참고해 작성)"}${attachmentsText ? `\n\n${attachmentsText}` : ""}${keywordsText}`
+${post.content || "(본문 텍스트 없음 - 아래 첨부 정보를 참고해 작성)"}${linkMarkersText ? `\n\n${linkMarkersText}` : ""}${imageHintsText}${keywordsText}`
 }
 
 // url_context 툴이 실제로 조회하지 못한 링크를 모아 경고 문구를 만든다.
@@ -330,42 +344,45 @@ async function resolveShortfallImages(
   return results
 }
 
-// 사용자가 제공한 사진이 카테고리 기준 개수보다 부족하면, 부족한 개수만큼 채워서
-// 서술형 문단 사이사이에 끼워넣는다. 정보/절차성 카테고리(결혼·육아·기타)는 AI 요약형
-// 이미지, 방문 후기성 카테고리(나들이·맛집)는 실사 검색 우선 + AI 생성 보완(CATEGORY_STYLE_NOTES 기준).
-async function insertGeneratedImages(
-  text: string,
-  apiKey: string,
-  post: Post,
-  existingImageCount: number
-): Promise<string> {
+// 사용자 첨부 사진과 부족분(실사 검색/AI 생성)을 모두 서술형 문단 사이사이에 프로그래밍적으로
+// 끼워넣는다. 첨부 사진의 URL은 LLM에게 애초에 주지 않으므로(위 formatImageAttachmentHints
+// 참고) 여기서 코드가 직접 삽입해야 실제로 첨부한 사진이 결과에 반드시 포함된다.
+// 정보/절차성 카테고리(결혼·육아·기타)는 AI 요약형 이미지, 방문 후기성 카테고리(나들이·맛집)는
+// 실사 검색 우선 + AI 생성 보완(CATEGORY_STYLE_NOTES 기준)으로 부족분을 채운다.
+async function insertImages(text: string, apiKey: string, post: Post): Promise<string> {
+  const attachments = (post.contentAttachments ?? []).filter((a) => a.kind === "image")
   const entry = post.category ? CATEGORY_STYLE_NOTES[post.category] : undefined
   const targetCount = entry?.aiImageCount ?? DEFAULT_AI_IMAGE_COUNT
   const style = entry?.imageStyle ?? DEFAULT_IMAGE_STYLE
-  const shortfall = targetCount - existingImageCount
-  if (shortfall <= 0) return text
+  const shortfall = Math.max(targetCount - attachments.length, 0)
+  const totalSlots = attachments.length + shortfall
+  if (totalSlots === 0) return text
 
   const paragraphs = text.split("\n\n")
-  const points = selectImageInsertionPoints(paragraphs, shortfall)
+  const points = selectImageInsertionPoints(paragraphs, totalSlots)
   if (points.length === 0) return text
 
-  const images = await resolveShortfallImages(
-    points,
-    paragraphs,
-    post.title,
-    post.tags,
-    apiKey,
-    style
-  )
+  // 앞쪽 자리는 사용자 첨부 사진, 나머지 자리만 검색/생성으로 채운다.
+  const shortfallPoints = points.slice(attachments.length)
+  const shortfallImages =
+    shortfallPoints.length > 0
+      ? await resolveShortfallImages(shortfallPoints, paragraphs, post.title, post.tags, apiKey, style)
+      : []
+
+  const images: ({ url: string; label?: string } | null)[] = [
+    ...attachments.map((a) => ({ url: a.url, label: a.label })),
+    ...shortfallImages.map((url) => (url ? { url } : null)),
+  ]
 
   const result = [...paragraphs]
   // 배열에 새 원소를 끼워넣는 대신 대상 문단 뒤에 마커를 이어붙이므로 인덱스가 밀리지 않는다.
   points.forEach((pointIndex, k) => {
-    const imageUrl = images[k]
-    if (!imageUrl) return
+    const image = images[k]
+    if (!image) return
+    const caption = image.label ? ` ${image.label}` : ""
     result[pointIndex] =
       result[pointIndex] +
-      `\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${imageUrl}]`
+      `\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${image.url}]${caption}`
   })
 
   return result.join("\n\n")
@@ -379,10 +396,6 @@ export async function generateNaverDraft(post: Post, styleGuide?: string): Promi
   if (!apiKey) {
     throw new Error("LLM_API_KEY가 설정되지 않았습니다.")
   }
-
-  const existingImageCount = (post.contentAttachments ?? []).filter(
-    (a) => a.kind === "image"
-  ).length
 
   const ai = new GoogleGenAI({ apiKey })
   const contents = buildUserMessage(post)
@@ -407,12 +420,7 @@ export async function generateNaverDraft(post: Post, styleGuide?: string): Promi
         response.candidates?.[0]?.urlContextMetadata?.urlMetadata
       )
 
-      const finalText = await insertGeneratedImages(
-        response.text,
-        apiKey,
-        post,
-        existingImageCount
-      )
+      const finalText = await insertImages(response.text, apiKey, post)
 
       return finalText + warning
     } catch (error) {
