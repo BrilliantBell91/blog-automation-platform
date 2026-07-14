@@ -7,6 +7,9 @@ import {
   type IllustrativeImageStyle,
 } from "./imageGen"
 import { searchRealImages } from "./imageSearch"
+import { searchNaverPlace } from "./naverLocalSearch"
+import { extractNaverPlaceId, fetchNaverPlaceDetail } from "./naverPlaceDetail"
+import { extractLinkLabel } from "./naverDraftParser"
 
 // 무료 티어 할당량은 모델별로 독립적으로 차감된다(실측 확인됨: gemini-3.5-flash가
 // 하루 한도로 막혀도 다른 모델은 정상 동작). 앞쪽부터 시도하고 할당량 소진(429)이나
@@ -163,6 +166,7 @@ function buildSystemPrompt(styleGuide?: string, category?: string): string {
 - "첨부된 사진 설명"이 주어지면 그 캡션 내용만 참고해서 본문 흐름 속에서 자연스럽게 한두 문장 언급해도 되지만, 사진 내용을 마음대로 상상해서 묘사하거나 없는 디테일을 지어내지 마세요.
 
 ## 키워드 및 링크 반영 규칙 (매우 중요, 사실 왜곡 금지)
+- "확인된 매장 정보"가 주어지면: 사용자가 첨부한 지도 URL 기준으로 실제 확인한 사실이므로 최우선입니다. 주소/전화/영업시간/주차/편의시설 등 주어진 항목은 본문 상단 요약에 반드시 이 값과 정확히 일치하게 포함하세요. url_context로 열어본 내용이나 스스로 알고 있는 정보가 이와 다르더라도 이 값을 따르고, 여기 없는 항목(화장실 유무 등)은 다른 출처로 확인되지 않는 한 언급하지 마세요.
 - "필수 포함 키워드"가 주어지면: 사용자가 직접 확인한 사실이므로, 각 키워드를 본문에 자연스럽게 반드시 포함하세요.
 - "필수 포함 키워드"가 없으면: 아래 \`[참고링크 - 지도/메뉴/리뷰 등 실제로 확인되는 내용만 반영: URL]\` 마커를 제공된 URL 컨텍스트 도구로 실제로 열어 확인한 내용(지도 위치, 메뉴, 리뷰/후기 등)만으로 글을 구성하세요.
 - **어느 경우든, 실제로 확인되지 않은 구체적 사실(메뉴명, 가격, 특정 리뷰 문구, 평점 등)은 절대 추측해서 지어내지 마세요.** 확인이 안 되거나 URL을 열람할 수 없으면 그 정보는 언급하지 말고 넘어가세요. 정확성이 자연스러움보다 우선입니다.
@@ -200,10 +204,56 @@ function formatImageAttachmentHints(attachments: LlmAttachment[]): string {
   return `\n\n첨부된 사진 설명 (참고용 - 사진 위치는 시스템이 자동 배치하니 마커는 쓰지 말고, 자연스러운 언급에만 활용):\n${captions.join("\n")}`
 }
 
+function isNaverMapUrl(url: string): boolean {
+  try {
+    return new URL(url).hostname.endsWith("map.naver.com")
+  } catch {
+    return false
+  }
+}
+
+// 지도 링크가 있으면 실제 매장 주소/전화를 조회해 "확인된 사실"로 프롬프트에 주입한다.
+// map.naver.com은 SPA라 url_context 툴이 페이지를 열어도 실제 주소/전화 텍스트를 못 얻고,
+// 그 결과 모델이 그럴듯하지만 틀린 정보를 지어내는 사고가 실측으로 확인되어 도입한
+// 안전장치다. 사용자가 직접 확인하고 첨부한 그 URL을 기준으로 삼아야 하므로:
+// 1순위) URL에 담긴 place ID로 네이버 플레이스 상세 페이지에서 그 정확한 장소의 정보를
+//        직접 조회한다(가장 신뢰할 수 있음 - 상호명이 흔해도 사용자가 고른 그 지점 그대로).
+// 2순위) place ID가 없으면 URL의 검색어(searchText 등)로 지역 검색을 시도한다.
+// 제목으로는 검색하지 않는다 — 흔한 상호명(예: "잇키")을 제목만으로 검색하면 완전히 다른
+// 지점(부평→송도)을 잘못 매칭하는 사고가 실측으로 확인됐고, 사용자도 "정확한 URL을
+// 첨부할 것이니 그 URL 기준으로 반영해달라"고 명시적으로 요청했다.
+async function buildVerifiedPlaceInfoText(attachments: LlmAttachment[]): Promise<string> {
+  const mapLink = attachments.find((a) => a.kind === "link" && isNaverMapUrl(a.url))
+  if (!mapLink) return ""
+
+  const placeId = extractNaverPlaceId(mapLink.url)
+  let place = placeId ? await fetchNaverPlaceDetail(placeId) : null
+
+  if (!place) {
+    const label = extractLinkLabel(mapLink.url)
+    if (label !== "지도에서 위치 보기") {
+      place = await searchNaverPlace(label)
+    }
+  }
+
+  if (!place) return ""
+
+  const address = place.roadAddress ?? place.address
+  if (!address) return ""
+
+  const lines = [`- 상호명: ${place.name ?? "(확인 안 됨)"}`, `- 주소: ${address}`]
+  if (place.telephone) lines.push(`- 전화: ${place.telephone}`)
+  if (place.businessHours) lines.push(`- 영업시간: ${place.businessHours}`)
+  if (place.parkingInfo) lines.push(`- 주차: ${place.parkingInfo}`)
+  if (place.conveniences?.length) lines.push(`- 편의시설: ${place.conveniences.join(", ")}`)
+
+  return `\n\n확인된 매장 정보 (사용자가 첨부한 지도 URL 기준 실제 확인된 사실 - 반드시 이 값과 정확히 일치하게 쓰고, 다른 곳에서 본 정보와 달라도 이 값을 따르세요. 여기 없는 항목(화장실 유무 등)은 확인되지 않은 것이니 언급하지 마세요):\n${lines.join("\n")}`
+}
+
 /**
  * 사용자 메시지 구성
  */
-function buildUserMessage(post: Post): string {
+function buildUserMessage(post: Post, verifiedPlaceInfoText: string): string {
   const attachments = post.contentAttachments ?? []
   const linkMarkersText = formatLinkMarkers(attachments)
   const imageHintsText = formatImageAttachmentHints(attachments)
@@ -222,7 +272,7 @@ function buildUserMessage(post: Post): string {
 필수 포함 해시태그: ${tagsText}
 
 본문:
-${post.content || "(본문 텍스트 없음 - 아래 첨부 정보를 참고해 작성)"}${linkMarkersText ? `\n\n${linkMarkersText}` : ""}${imageHintsText}${keywordsText}`
+${post.content || "(본문 텍스트 없음 - 아래 첨부 정보를 참고해 작성)"}${linkMarkersText ? `\n\n${linkMarkersText}` : ""}${imageHintsText}${verifiedPlaceInfoText}${keywordsText}`
 }
 
 // url_context 툴이 실제로 조회하지 못한 링크를 모아 경고 문구를 만든다.
@@ -369,20 +419,21 @@ async function insertImages(text: string, apiKey: string, post: Post): Promise<s
       ? await resolveShortfallImages(shortfallPoints, paragraphs, post.title, post.tags, apiKey, style)
       : []
 
-  const images: ({ url: string; label?: string } | null)[] = [
-    ...attachments.map((a) => ({ url: a.url, label: a.label })),
-    ...shortfallImages.map((url) => (url ? { url } : null)),
+  // 첨부 사진의 캡션으로 Notion 파일명(예: "20180206_195520.jpg")이 그대로 화면에 노출되던
+  // 문제가 있어, 마커에는 캡션을 붙이지 않는다(파일명은 의미 있는 설명이 아니므로).
+  const images: (string | null)[] = [
+    ...attachments.map((a) => a.url),
+    ...shortfallImages,
   ]
 
   const result = [...paragraphs]
   // 배열에 새 원소를 끼워넣는 대신 대상 문단 뒤에 마커를 이어붙이므로 인덱스가 밀리지 않는다.
   points.forEach((pointIndex, k) => {
-    const image = images[k]
-    if (!image) return
-    const caption = image.label ? ` ${image.label}` : ""
+    const imageUrl = images[k]
+    if (!imageUrl) return
     result[pointIndex] =
       result[pointIndex] +
-      `\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${image.url}]${caption}`
+      `\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${imageUrl}]`
   })
 
   return result.join("\n\n")
@@ -397,8 +448,10 @@ export async function generateNaverDraft(post: Post, styleGuide?: string): Promi
     throw new Error("LLM_API_KEY가 설정되지 않았습니다.")
   }
 
+  const verifiedPlaceInfoText = await buildVerifiedPlaceInfoText(post.contentAttachments ?? [])
+
   const ai = new GoogleGenAI({ apiKey })
-  const contents = buildUserMessage(post)
+  const contents = buildUserMessage(post, verifiedPlaceInfoText)
   const config = {
     systemInstruction: buildSystemPrompt(styleGuide, post.category),
     httpOptions: { timeout: TIMEOUT_MS },

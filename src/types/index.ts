@@ -29,8 +29,8 @@ export interface NotionBlock {
 }
 
 // 네이버 초안 생성(LLM)에만 쓰이는 첨부 정보.
-// 사진/링크가 본문 블록이 아니라 "Content" 속성(파일과 미디어 타입)에
-// 올라오는 경우까지 포함해서 모은다. Post.content(공개 웹사이트/검색에 쓰임)와는
+// 사진/링크가 본문 블록이 아니라 "Image"(파일과 미디어 타입) 속성이나 "URL"(참고 링크)
+// 속성에 올라오는 경우까지 포함해서 모은다. Post.content(공개 웹사이트/검색에 쓰임)와는
 // 별개로 관리해 마커 텍스트가 사이트에 노출되지 않게 한다.
 export interface LlmAttachment {
   kind: 'image' | 'link'

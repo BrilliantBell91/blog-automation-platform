@@ -13,7 +13,7 @@ const LINK_MARKER = /^\[참고링크[^:]*:\s*([^\]\s]+)\]\s*(.*)$/
 
 // 지도 URL을 그대로 노출하면 실제 게시글처럼 안 보이므로, 검색어/장소명 쿼리 파라미터나
 // 경로에서 사람이 읽을 수 있는 라벨을 뽑아내 링크 카드에 쓴다. 못 찾으면 기본 문구로 대체.
-function extractLinkLabel(url: string): string {
+export function extractLinkLabel(url: string): string {
   try {
     const parsed = new URL(url)
     const queryLabel =

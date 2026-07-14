@@ -3,14 +3,34 @@ import { generateNaverDraft, MODEL_FALLBACK_CHAIN } from "./llm"
 import type { Post } from "@/types"
 
 const generateContentMock = vi.fn()
-const { searchRealImagesMock, verifyImageRelevanceMock } = vi.hoisted(() => ({
+const {
+  searchRealImagesMock,
+  verifyImageRelevanceMock,
+  searchNaverPlaceMock,
+  fetchNaverPlaceDetailMock,
+} = vi.hoisted(() => ({
   searchRealImagesMock: vi.fn().mockResolvedValue([]),
   verifyImageRelevanceMock: vi.fn().mockResolvedValue(true),
+  searchNaverPlaceMock: vi.fn().mockResolvedValue(null),
+  fetchNaverPlaceDetailMock: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock("./imageSearch", () => ({
   searchRealImages: searchRealImagesMock,
 }))
+
+vi.mock("./naverLocalSearch", () => ({
+  searchNaverPlace: searchNaverPlaceMock,
+}))
+
+// extractNaverPlaceId는 실제 구현(순수 정규식 파싱)을 그대로 쓰고, fetchNaverPlaceDetail만 목으로 제어한다.
+vi.mock("./naverPlaceDetail", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./naverPlaceDetail")>()
+  return {
+    ...actual,
+    fetchNaverPlaceDetail: fetchNaverPlaceDetailMock,
+  }
+})
 
 // generateIllustrativeImage는 실제 구현(아래 "@google/genai" 목 기반)을 그대로 쓰고,
 // verifyImageRelevance만 별도로 제어한다(비전 검증 호출까지 실제로 흉내내면 테스트가
@@ -77,6 +97,8 @@ describe("llm", () => {
     generateContentMock.mockReset()
     searchRealImagesMock.mockReset().mockResolvedValue([])
     verifyImageRelevanceMock.mockReset().mockResolvedValue(true)
+    searchNaverPlaceMock.mockReset().mockResolvedValue(null)
+    fetchNaverPlaceDetailMock.mockReset().mockResolvedValue(null)
   })
 
   describe("generateNaverDraft", () => {
@@ -148,6 +170,86 @@ describe("llm", () => {
       expect(callArgs.contents).toContain(
         "[참고링크 - 지도/메뉴/리뷰 등 실제로 확인되는 내용만 반영: https://map.naver.com/p/place/123]"
       )
+    })
+
+    it("지도 URL에 place ID가 있으면 그 ID로 상세 정보를 조회해 확인된 매장 정보에 반영한다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      fetchNaverPlaceDetailMock.mockResolvedValueOnce({
+        name: "잇키",
+        address: "인천 부평구 청천동 366-37",
+        roadAddress: "인천 부평구 마장로 397 1층",
+        telephone: "0507-1490-0634",
+      })
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft({
+        ...mockPost,
+        // 상호명("잇키")만으로 텍스트 검색하면 실측에서 완전히 다른 지점(부평→송도)을
+        // 잘못 매칭하는 사고가 확인되어, 사용자가 첨부한 URL의 place ID를 최우선으로 쓴다.
+        contentAttachments: [
+          { kind: "link", url: "https://map.naver.com/p/search/잇키/place/1370160067" },
+        ],
+      })
+
+      expect(fetchNaverPlaceDetailMock).toHaveBeenCalledWith("1370160067")
+      expect(searchNaverPlaceMock).not.toHaveBeenCalled()
+      const callArgs = generateContentMock.mock.calls[0][0]
+      expect(callArgs.contents).toContain("확인된 매장 정보")
+      expect(callArgs.contents).toContain("인천 부평구 마장로 397 1층")
+      expect(callArgs.contents).toContain("0507-1490-0634")
+    })
+
+    it("place ID 조회가 실패하면 URL의 검색어로 지역 검색을 시도한다(제목은 쓰지 않음)", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      fetchNaverPlaceDetailMock.mockResolvedValueOnce(null)
+      searchNaverPlaceMock.mockResolvedValueOnce({
+        name: "잇키",
+        address: "인천 부평구 청천동 366-37",
+        roadAddress: "인천 부평구 마장로 397 1층",
+      })
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft({
+        ...mockPost,
+        title: "이 제목은 검색에 쓰이면 안 됨",
+        contentAttachments: [
+          {
+            kind: "link",
+            url: "https://map.naver.com/p/search/place/1370160067?searchText=%EC%9E%87%ED%82%A4",
+          },
+        ],
+      })
+
+      expect(fetchNaverPlaceDetailMock).toHaveBeenCalledWith("1370160067")
+      expect(searchNaverPlaceMock).toHaveBeenCalledWith("잇키")
+    })
+
+    it("URL에 place ID도 없고 검색어 추출도 안 되면 확인된 매장 정보 없이 url_context에만 의존한다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [{ kind: "link", url: "https://map.naver.com/p/abc" }],
+      })
+
+      expect(fetchNaverPlaceDetailMock).not.toHaveBeenCalled()
+      expect(searchNaverPlaceMock).not.toHaveBeenCalled()
+      const callArgs = generateContentMock.mock.calls[0][0]
+      expect(callArgs.contents).not.toContain("확인된 매장 정보")
+    })
+
+    it("지도 링크가 없으면 place 조회를 시도하지 않는다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [{ kind: "link", url: "https://example.com/review/123" }],
+      })
+
+      expect(fetchNaverPlaceDetailMock).not.toHaveBeenCalled()
+      expect(searchNaverPlaceMock).not.toHaveBeenCalled()
     })
 
     it("url_context 툴이 항상 활성화된 상태로 호출된다", async () => {
@@ -412,7 +514,7 @@ describe("llm", () => {
       expect(searchRealImagesMock).not.toHaveBeenCalled() // 부족분이 없으니 검색도 하지 않음
     })
 
-    it("첨부 사진에 캡션이 있으면 삽입되는 마커 뒤에 캡션이 그대로 붙는다", async () => {
+    it("첨부 사진에 label(Notion 파일명 등)이 있어도 마커에는 캡션을 붙이지 않는다(파일명 노출 방지)", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({
         text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
@@ -421,13 +523,14 @@ describe("llm", () => {
       const result = await generateNaverDraft({
         ...mockPost,
         contentAttachments: [
-          { kind: "image", url: "https://example.com/1.jpg", label: "가게 전경" },
+          { kind: "image", url: "https://example.com/1.jpg", label: "20180206_195520.jpg" },
         ],
       })
 
       expect(result).toContain(
-        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://example.com/1.jpg] 가게 전경"
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://example.com/1.jpg]"
       )
+      expect(result).not.toContain("20180206_195520.jpg")
     })
 
     it("첨부 사진이 카테고리 기준 개수보다 부족하면 첨부 사진을 먼저 배치하고 나머지만 검색/생성으로 채운다", async () => {

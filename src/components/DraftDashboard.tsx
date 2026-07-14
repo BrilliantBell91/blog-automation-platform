@@ -3,7 +3,7 @@
 import { useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Loader2, Eye, ExternalLink, RefreshCw } from "lucide-react"
+import { Loader2, Pencil, ExternalLink, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import { Post, Draft, DraftStatus } from "@/types"
 import { formatDate } from "@/lib/formatters"
@@ -241,13 +241,13 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                                 variant="ghost"
                                 size="icon"
                                 className="h-11 w-11"
-                                aria-label="초안 미리보기"
+                                aria-label="수정하기"
                                 onClick={() => setPreviewItem({ post, draft })}
                               >
-                                <Eye className="h-4 w-4" aria-hidden="true" />
+                                <Pencil className="h-4 w-4" aria-hidden="true" />
                               </Button>
                             </TooltipTrigger>
-                            <TooltipContent>초안 미리보기</TooltipContent>
+                            <TooltipContent>수정하기</TooltipContent>
                           </Tooltip>
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -255,7 +255,7 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                                 variant="ghost"
                                 size="icon"
                                 className="h-11 w-11"
-                                aria-label="블로그 화면으로 보기"
+                                aria-label="초안 미리보기"
                                 asChild
                               >
                                 <Link
@@ -267,7 +267,7 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                                 </Link>
                               </Button>
                             </TooltipTrigger>
-                            <TooltipContent>블로그 화면으로 보기</TooltipContent>
+                            <TooltipContent>초안 미리보기</TooltipContent>
                           </Tooltip>
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -328,7 +328,7 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
       >
         <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
           <SheetHeader>
-            <SheetTitle>초안 미리보기</SheetTitle>
+            <SheetTitle>수정하기</SheetTitle>
           </SheetHeader>
           {/* Sheet 자체를 세로 스크롤 가능하게 하여 모바일 뷰포트에서 콘텐츠가 잘리지 않도록 함 */}
           <div className="mt-6">

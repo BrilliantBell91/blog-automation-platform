@@ -202,20 +202,32 @@ function blocksToAttachments(blocks: NotionBlock[]): LlmAttachment[] {
   return attachments
 }
 
-// "Content" 속성이 페이지 본문 블록이 아니라 "파일과 미디어" 타입으로 쓰이는 경우를 지원한다.
-// 실제 업로드된 파일은 사진으로, 파일명 자리에 URL을 붙여넣은 외부 항목은 참고링크로 취급한다.
-function getContentPropertyAttachments(page: PageObjectResponse, name: string): LlmAttachment[] {
+// "Image" 속성("파일과 미디어" 타입)에 첨부한 사진/영상을 사진 첨부로 변환한다.
+// 기존에는 "Content" 속성 하나가 사진과 참고 URL을 겸했으나, 이제 "Image"는 사진/영상
+// 전용이고 참고 URL은 별도 "URL" 속성(getUrlPropertyAttachments)으로 분리되었다.
+function getImagePropertyAttachments(page: PageObjectResponse, name: string): LlmAttachment[] {
   const prop = page.properties[name]
   if (prop?.type !== "files") return []
 
   return prop.files.map((file): LlmAttachment => {
-    if (file.type === "file") {
-      return { kind: "image", url: file.file.url, label: file.name || undefined }
-    }
-    // 이름이 URL 자체와 같으면 라벨로서 의미가 없으므로 생략한다.
-    const label = file.name && file.name !== file.external.url ? file.name : undefined
-    return { kind: "link", url: file.external.url, label }
+    const url = file.type === "file" ? file.file.url : file.external.url
+    return { kind: "image", url, label: file.name || undefined }
   })
+}
+
+// "URL" 속성(장소/메뉴/리뷰 등 참고용 링크)을 참고링크 첨부로 변환한다.
+// Notion에서 url 타입(단일 값) 또는 rich_text(여러 URL을 줄바꿈/쉼표로 나열)로 입력할 수
+// 있어 둘 다 지원한다.
+function getUrlPropertyAttachments(page: PageObjectResponse, name: string): LlmAttachment[] {
+  const prop = page.properties[name]
+  if (prop?.type === "url") {
+    return prop.url ? [{ kind: "link", url: prop.url }] : []
+  }
+  if (prop?.type === "rich_text") {
+    const urls = richTextToPlainText(prop.rich_text).match(/https?:\/\/\S+/g) ?? []
+    return urls.map((url): LlmAttachment => ({ kind: "link", url }))
+  }
+  return []
 }
 
 function blocksToExcerpt(blocks: NotionBlock[], maxLength = 120): string {
@@ -248,7 +260,11 @@ async function mapPageToPost(page: PageObjectResponse): Promise<Post> {
     blocks,
     thumbnailBlockId: fallbackImageBlock?.id,
     keywords: getKeywords(page, "Keyword"),
-    contentAttachments: [...blocksToAttachments(blocks), ...getContentPropertyAttachments(page, "Content")],
+    contentAttachments: [
+      ...blocksToAttachments(blocks),
+      ...getImagePropertyAttachments(page, "Image"),
+      ...getUrlPropertyAttachments(page, "URL"),
+    ],
     createdAt: new Date(page.created_time),
     updatedAt: new Date(page.last_edited_time),
   }
