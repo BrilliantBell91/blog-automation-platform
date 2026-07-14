@@ -11,7 +11,7 @@ const {
   fetchMock,
 } = vi.hoisted(() => ({
   searchRealImagesMock: vi.fn().mockResolvedValue([]),
-  verifyImageRelevanceMock: vi.fn().mockResolvedValue(true),
+  verifyImageRelevanceMock: vi.fn().mockResolvedValue("relevant"),
   searchNaverPlaceMock: vi.fn().mockResolvedValue(null),
   fetchNaverPlaceDetailMock: vi.fn().mockResolvedValue(null),
   // Pollinations 이미지 생성(imageGen.ts)이 전역 fetch를 직접 호출한다. 실제 네트워크를
@@ -102,7 +102,7 @@ describe("llm", () => {
     delete process.env.LLM_API_KEY
     generateContentMock.mockReset()
     searchRealImagesMock.mockReset().mockResolvedValue([])
-    verifyImageRelevanceMock.mockReset().mockResolvedValue(true)
+    verifyImageRelevanceMock.mockReset().mockResolvedValue("relevant")
     searchNaverPlaceMock.mockReset().mockResolvedValue(null)
     fetchNaverPlaceDetailMock.mockReset().mockResolvedValue(null)
     fetchMock.mockReset().mockResolvedValue({ ok: false })
@@ -443,7 +443,7 @@ describe("llm", () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock
         .mockResolvedValueOnce({
-          text: "안녕하세요.\n\n첫 번째 이야기.\n\n두 번째 이야기.\n\n마무리 인사.",
+          text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
         })
         .mockResolvedValueOnce({
           candidates: [
@@ -460,7 +460,7 @@ describe("llm", () => {
       const result = await generateNaverDraft(mockPost)
 
       expect(result).toBe(
-        "안녕하세요.\n\n첫 번째 이야기.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]\n\n두 번째 이야기.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n마무리 인사."
+        "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n마무리 인사."
       )
       expect(generateContentMock).toHaveBeenCalledTimes(3)
     })
@@ -468,7 +468,7 @@ describe("llm", () => {
     it("첨부 사진이 카테고리 기준 개수만큼 있으면 부족분 검색/생성 없이 첨부 사진만 프로그래밍적으로 삽입한다", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({
-        text: "안녕하세요.\n\n하나.\n\n둘.\n\n셋.\n\n넷.\n\n마무리 인사.",
+        text: "안녕하세요.\n\n첫 번째 문단 내용입니다 여기에는 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n두 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n세 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n네 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n마무리 인사.",
       })
 
       const result = await generateNaverDraft({
@@ -500,7 +500,7 @@ describe("llm", () => {
     it("첨부 사진에 label(Notion 파일명 등)이 있어도 마커에는 캡션을 붙이지 않는다(파일명 노출 방지)", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({
-        text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
       const result = await generateNaverDraft({
@@ -520,7 +520,7 @@ describe("llm", () => {
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock.mockResolvedValue(["https://search.example.com/real.jpg"])
       generateContentMock.mockResolvedValueOnce({
-        text: "안녕하세요.\n\n하나.\n\n둘.\n\n마무리 인사.",
+        text: "안녕하세요.\n\n첫 번째 문단 내용입니다 여기에는 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n두 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n마무리 인사.",
       })
 
       const result = await generateNaverDraft({
@@ -540,13 +540,13 @@ describe("llm", () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock
         .mockResolvedValueOnce({
-          text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+          text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
         })
         .mockRejectedValueOnce(new Error("이미지 생성 실패"))
 
       const result = await generateNaverDraft(mockPost)
 
-      expect(result).toBe("안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.")
+      expect(result).toBe("안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.")
     })
 
     it("실사 스타일 카테고리는 슬롯마다 다른 검색어로 네이버 이미지 검색을 하고 AI를 호출하지 않는다", async () => {
@@ -555,14 +555,14 @@ describe("llm", () => {
         .mockResolvedValueOnce(["https://search.example.com/real1.jpg"])
         .mockResolvedValueOnce(["https://search.example.com/real2.jpg"])
       generateContentMock.mockResolvedValueOnce({
-        text: "안녕하세요.\n\n첫 번째 이야기.\n\n두 번째 이야기.\n\n마무리 인사.",
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
       // mockPost.category === "맛집" (photo 스타일), tags === ["서울", "카페"]
       const result = await generateNaverDraft(mockPost)
 
       expect(result).toBe(
-        "안녕하세요.\n\n첫 번째 이야기.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n두 번째 이야기.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real2.jpg]\n\n마무리 인사."
+        "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real2.jpg]\n\n마무리 인사."
       )
       // 텍스트 생성 1회만 호출되고, 이미지 생성(AI)은 호출되지 않는다
       expect(generateContentMock).toHaveBeenCalledTimes(1)
@@ -583,7 +583,7 @@ describe("llm", () => {
           "https://search.example.com/onlyB.jpg",
         ])
       generateContentMock.mockResolvedValueOnce({
-        text: "안녕하세요.\n\n첫 번째 이야기.\n\n두 번째 이야기.\n\n마무리 인사.",
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
       const result = await generateNaverDraft(mockPost)
@@ -604,10 +604,10 @@ describe("llm", () => {
         "https://search.example.com/related.jpg",
       ])
       verifyImageRelevanceMock
-        .mockResolvedValueOnce(false) // 첫 후보는 본문과 무관
-        .mockResolvedValueOnce(true) // 두 번째 후보는 관련 있음
+        .mockResolvedValueOnce("irrelevant") // 첫 후보는 본문과 무관
+        .mockResolvedValueOnce("relevant") // 두 번째 후보는 관련 있음
       generateContentMock.mockResolvedValueOnce({
-        text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
       const result = await generateNaverDraft(mockPost)
@@ -619,6 +619,22 @@ describe("llm", () => {
       expect(generateContentMock).toHaveBeenCalledTimes(1) // AI 생성으로 폴백하지 않음
     })
 
+    it("검증 모델 호출 자체가 실패(unknown)하면 무관 판정과 다르게 후보를 그대로 사용한다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock.mockResolvedValueOnce(["https://search.example.com/unverified.jpg"])
+      verifyImageRelevanceMock.mockResolvedValueOnce("unknown") // 검증 모델 할당량 소진 등
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+      })
+
+      const result = await generateNaverDraft(mockPost)
+
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/unverified.jpg]"
+      )
+      expect(generateContentMock).toHaveBeenCalledTimes(1) // AI 생성으로 폴백하지 않음
+    })
+
     it("슬롯당 검증 시도가 3회를 넘으면 AI 생성으로 폴백한다", async () => {
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock.mockResolvedValueOnce([
@@ -627,10 +643,10 @@ describe("llm", () => {
         "https://search.example.com/c.jpg",
         "https://search.example.com/d.jpg",
       ])
-      verifyImageRelevanceMock.mockResolvedValue(false) // 전부 무관 판정
+      verifyImageRelevanceMock.mockResolvedValue("irrelevant") // 전부 무관 판정
       generateContentMock
         .mockResolvedValueOnce({
-          text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+          text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
         })
         .mockResolvedValueOnce({
           candidates: [
@@ -651,7 +667,7 @@ describe("llm", () => {
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock.mockResolvedValue(["https://search.example.com/real.jpg"])
       generateContentMock.mockResolvedValueOnce({
-        text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
       await generateNaverDraft({ ...mockPost, title: "[테스트] 부평 이자카야 잇키" })
@@ -666,7 +682,7 @@ describe("llm", () => {
         .mockResolvedValueOnce([])
       generateContentMock
         .mockResolvedValueOnce({
-          text: "안녕하세요.\n\n첫 번째 이야기.\n\n두 번째 이야기.\n\n마무리 인사.",
+          text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
         })
         .mockResolvedValueOnce({
           candidates: [
@@ -677,7 +693,7 @@ describe("llm", () => {
       const result = await generateNaverDraft(mockPost)
 
       expect(result).toBe(
-        "안녕하세요.\n\n첫 번째 이야기.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n두 번째 이야기.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n마무리 인사."
+        "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n마무리 인사."
       )
       expect(generateContentMock).toHaveBeenCalledTimes(2)
     })
@@ -686,7 +702,7 @@ describe("llm", () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock
         .mockResolvedValueOnce({
-          text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+          text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
         })
         .mockResolvedValueOnce({
           candidates: [

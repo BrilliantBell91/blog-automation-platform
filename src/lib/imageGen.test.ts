@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { generateAiImage } from "./imageGen"
+import { generateAiImage, verifyImageRelevance } from "./imageGen"
 
 const generateContentMock = vi.fn()
 const { fetchMock } = vi.hoisted(() => ({
@@ -95,6 +95,52 @@ describe("imageGen", () => {
       const result = await generateAiImage("test-key", "설명", "photo")
 
       expect(result).toBeNull()
+    })
+  })
+
+  describe("verifyImageRelevance", () => {
+    function mockImageDownloadOk() {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => "image/jpeg" },
+        arrayBuffer: async () => new ArrayBuffer(4),
+      })
+    }
+
+    it("모델이 '예'라고 답하면 relevant를 반환한다", async () => {
+      mockImageDownloadOk()
+      generateContentMock.mockResolvedValueOnce({ text: "예" })
+
+      const result = await verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
+
+      expect(result).toBe("relevant")
+    })
+
+    it("모델이 '아니오'라고 답하면 irrelevant를 반환한다", async () => {
+      mockImageDownloadOk()
+      generateContentMock.mockResolvedValueOnce({ text: "아니오" })
+
+      const result = await verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
+
+      expect(result).toBe("irrelevant")
+    })
+
+    it("후보 이미지 다운로드 자체가 실패하면 irrelevant를 반환한다(모델 호출 안 함)", async () => {
+      fetchMock.mockResolvedValueOnce({ ok: false })
+
+      const result = await verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
+
+      expect(result).toBe("irrelevant")
+      expect(generateContentMock).not.toHaveBeenCalled()
+    })
+
+    it("검증 모델 호출이 실패(할당량 소진 등)하면 unknown을 반환한다", async () => {
+      mockImageDownloadOk()
+      generateContentMock.mockRejectedValueOnce(new Error("quota exceeded"))
+
+      const result = await verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
+
+      expect(result).toBe("unknown")
     })
   })
 })

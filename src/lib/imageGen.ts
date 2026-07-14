@@ -28,9 +28,13 @@ async function generateImageWithPollinations(
   style: IllustrativeImageStyle
 ): Promise<string | null> {
   try {
-    const prompt = `${buildStyleInstruction(style)} ${description}. 텍스트나 워터마크, 로고 없이.`
+    // 설명이 짧거나 장면 정보가 부족하면 flux가 본문과 무관한 인물 클로즈업 사진으로
+    // 대체하는 경향이 실측으로 확인되어(예: 놀이공원 후기 글에 뜬금없는 인물 초상 사진),
+    // 인물 클로즈업/초상 사진은 만들지 말라고 명시적으로 지시한다. safe=true로 선정성
+    // 있는 결과도 함께 걸러낸다.
+    const prompt = `${buildStyleInstruction(style)} ${description}. 인물 클로즈업이나 얼굴이 크게 나오는 초상 사진은 만들지 말고, 풍경·사물·분위기 위주로 표현해주세요. 텍스트나 워터마크, 로고 없이.`
     const seed = Math.floor(Math.random() * 1_000_000)
-    const url = `${POLLINATIONS_BASE_URL}/${encodeURIComponent(prompt)}?model=${POLLINATIONS_MODEL}&width=1024&height=768&nologo=true&seed=${seed}`
+    const url = `${POLLINATIONS_BASE_URL}/${encodeURIComponent(prompt)}?model=${POLLINATIONS_MODEL}&width=1024&height=768&nologo=true&safe=true&seed=${seed}`
 
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), POLLINATIONS_TIMEOUT_MS)
@@ -81,7 +85,8 @@ export async function generateIllustrativeImage(
 ${buildStyleInstruction(style)}
 텍스트·워터마크·로고는 최소화하고 절대 큰 글자로 넣지 마세요.
 장면: ${description}
-특정 실존 장소나 인물이 아니라, 글의 분위기를 보여주는 일반적인 이미지로 만들어주세요.`
+특정 실존 장소나 인물이 아니라, 글의 분위기를 보여주는 일반적인 이미지로 만들어주세요.
+인물 클로즈업이나 얼굴이 크게 나오는 초상 사진은 만들지 말고, 풍경·사물·분위기 위주로 표현해주세요.`
 
     const response = await ai.models.generateContent({
       model: IMAGE_MODEL,
@@ -104,18 +109,29 @@ ${buildStyleInstruction(style)}
 // 곳일수록 무관한 사진이 섞여 나옴), 비전 모델로 본문 설명과 실제로 관련 있는지 검증한다.
 const VERIFY_MODEL = "gemini-3-flash-preview"
 
+// "irrelevant"는 모델이 실제로 "무관하다"고 답한 경우, "unknown"은 검증 자체(할당량
+// 소진 등)가 실패해 답을 못 받은 경우다. 이 둘을 구분해야 Gemini 할당량이 소진됐다고
+// 검색 후보를 전부 버리고 AI 생성으로만 몰리는 것을 막을 수 있다(실측 확인된 문제).
+export type ImageRelevanceResult = "relevant" | "irrelevant" | "unknown"
+
 export async function verifyImageRelevance(
   apiKey: string,
   imageUrl: string,
   description: string
-): Promise<boolean> {
+): Promise<ImageRelevanceResult> {
+  let mimeType: string
+  let base64: string
   try {
     const imageRes = await fetch(imageUrl)
-    if (!imageRes.ok) return false
-    const mimeType = imageRes.headers.get("content-type") || "image/jpeg"
-    const buffer = await imageRes.arrayBuffer()
-    const base64 = Buffer.from(buffer).toString("base64")
+    if (!imageRes.ok) return "irrelevant"
+    mimeType = imageRes.headers.get("content-type") || "image/jpeg"
+    base64 = Buffer.from(await imageRes.arrayBuffer()).toString("base64")
+  } catch (error) {
+    console.warn("[imageGen] 후보 이미지 다운로드 실패", error)
+    return "irrelevant" // 후보 자체를 못 받았으니 안전하게 사용하지 않는다
+  }
 
+  try {
     const ai = new GoogleGenAI({ apiKey })
     const response = await ai.models.generateContent({
       model: VERIFY_MODEL,
@@ -132,9 +148,9 @@ export async function verifyImageRelevance(
       ],
     })
 
-    return (response.text ?? "").trim().startsWith("예")
+    return (response.text ?? "").trim().startsWith("예") ? "relevant" : "irrelevant"
   } catch (error) {
-    console.warn("[imageGen] 이미지 관련성 검증 실패", error)
-    return false // 검증 자체가 실패하면 안전하게 사용하지 않는다
+    console.warn("[imageGen] 이미지 관련성 검증(모델 호출) 실패 - 확인 불가로 처리", error)
+    return "unknown"
   }
 }

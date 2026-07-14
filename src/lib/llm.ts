@@ -276,16 +276,23 @@ ${post.content || "(본문 텍스트 없음 - 아래 첨부 정보를 참고해 
 
 const MARKER_PARAGRAPH = /^\[(사진 원본|참고링크)/
 
+// 이미지 슬롯의 "장면 설명"으로 쓰기엔 너무 짧은 문단(예: "그럼 다들 기분 좋은 하루
+// 보내세요.🙌" 같은 마무리 인사)은 실질적인 장면 정보가 없어, AI 생성 이미지가 본문과
+// 전혀 무관한 결과(인물 클로즈업 등)로 나오는 사고가 실측으로 확인됐다.
+const MIN_VISUAL_PARAGRAPH_LENGTH = 40
+
 // AI 생성 이미지를 끼워넣을 문단 위치를 고른다. 인사말(첫 문단)/마무리·해시태그(마지막 문단),
-// 인용구·해시태그 줄, 이미 사진/링크 마커인 문단은 후보에서 제외하고, 남은 "서술형" 문단 중
-// 균등한 간격으로 count개를 고른다. (지시문만으로 LLM에게 위치 표시를 맡겼을 때 실제로는
-// 자주 무시되는 것을 확인해서, 생성된 텍스트를 후처리하는 결정론적 방식으로 전환함)
+// 인용구·해시태그 줄, 이미 사진/링크 마커인 문단, 장면 설명으로 쓰기엔 너무 짧은 문단은
+// 후보에서 제외하고, 남은 "서술형" 문단 중 균등한 간격으로 count개를 고른다. (지시문만으로
+// LLM에게 위치 표시를 맡겼을 때 실제로는 자주 무시되는 것을 확인해서, 생성된 텍스트를
+// 후처리하는 결정론적 방식으로 전환함)
 function selectImageInsertionPoints(paragraphs: string[], count: number): number[] {
   const candidates: number[] = []
   paragraphs.forEach((raw, i) => {
     const p = raw.trim()
     if (i === 0 || i === paragraphs.length - 1) return
     if (!p || p.startsWith(">") || p.startsWith("#") || MARKER_PARAGRAPH.test(p)) return
+    if (p.length < MIN_VISUAL_PARAGRAPH_LENGTH) return
     candidates.push(i)
   })
 
@@ -333,6 +340,10 @@ async function resolveShortfallImages(
   // 유명하지 않은 가게일수록 검색 결과에 전혀 무관한 사진이 섞여 나오는 걸 실측으로
   // 확인해서, 관련성 검증 없이는 신뢰할 수 없다고 판단함. 비용을 고려해 슬롯당 검증
   // 시도는 최대 3장으로 제한하고, 통과하는 후보가 없으면 AI 생성으로 폴백한다.
+  // 단, 검증 모델 자체가 할당량 소진 등으로 응답을 못 준 경우("unknown")는 "무관함"과
+  // 다르게 취급한다 — 이미 슬롯별 제목+태그로 타겟팅된 검색 결과라 신뢰도가 있는데도,
+  // Gemini 할당량이 소진된 날은 모든 후보가 검증 실패로 버려져 실사 검색이 무력화되고
+  // 매번 AI 생성으로만 몰리는 문제가 실측으로 확인되어 완화한 것이다.
   const MAX_VERIFY_ATTEMPTS_PER_SLOT = 3
   const usedUrls = new Set<string>()
   const results: (string | null)[] = []
@@ -346,10 +357,13 @@ async function resolveShortfallImages(
       if (usedUrls.has(candidate)) continue
       if (attempts >= MAX_VERIFY_ATTEMPTS_PER_SLOT) break
       attempts++
-      if (await verifyImageRelevance(apiKey, candidate, description)) {
-        pick = candidate
-        break
+      const relevance = await verifyImageRelevance(apiKey, candidate, description)
+      if (relevance === "irrelevant") continue
+      if (relevance === "unknown") {
+        console.warn(`[llm] 이미지 관련성 확인 불가(검증 모델 호출 실패) - 검증 없이 사용: ${candidate}`)
       }
+      pick = candidate
+      break
     }
 
     if (pick) usedUrls.add(pick)
