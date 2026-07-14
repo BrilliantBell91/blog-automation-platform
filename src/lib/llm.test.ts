@@ -289,5 +289,42 @@ describe("llm", () => {
       // 404는 재시도하지 않으므로 첫 모델 1회 + 두 번째 모델 1회 = 총 2회
       expect(generateContentMock).toHaveBeenCalledTimes(2)
     })
+
+    it("503(일시 과부하) 에러가 재시도 중 정상 응답으로 회복되면 결과를 반환한다", async () => {
+      vi.useFakeTimers()
+      process.env.LLM_API_KEY = "test-key"
+      const { ApiError } = await import("@google/genai")
+      generateContentMock
+        .mockRejectedValueOnce(new ApiError({ message: "UNAVAILABLE", status: 503 }))
+        .mockResolvedValueOnce({ text: "재시도 후 생성된 초안" })
+
+      const promise = generateNaverDraft(mockPost)
+      await vi.runAllTimersAsync()
+      const result = await promise
+
+      expect(result).toBe("재시도 후 생성된 초안")
+      expect(generateContentMock).toHaveBeenCalledTimes(2)
+      vi.useRealTimers()
+    })
+
+    it("첫 모델이 재시도 끝에 계속 503이면 다음 모델로 자동 전환해 초안을 생성한다", async () => {
+      vi.useFakeTimers()
+      process.env.LLM_API_KEY = "test-key"
+      const { ApiError } = await import("@google/genai")
+      generateContentMock
+        .mockRejectedValueOnce(new ApiError({ message: "UNAVAILABLE", status: 503 }))
+        .mockRejectedValueOnce(new ApiError({ message: "UNAVAILABLE", status: 503 }))
+        .mockRejectedValueOnce(new ApiError({ message: "UNAVAILABLE", status: 503 }))
+        .mockRejectedValueOnce(new ApiError({ message: "UNAVAILABLE", status: 503 }))
+        .mockResolvedValueOnce({ text: "두 번째 모델이 생성한 초안" })
+
+      const promise = generateNaverDraft(mockPost)
+      await vi.runAllTimersAsync()
+      const result = await promise
+
+      expect(result).toBe("두 번째 모델이 생성한 초안")
+      expect(generateContentMock).toHaveBeenCalledTimes(5)
+      expect(generateContentMock.mock.calls[4][0].model).toBe(MODEL_FALLBACK_CHAIN[1])
+    })
   })
 })

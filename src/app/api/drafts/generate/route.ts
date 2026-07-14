@@ -105,6 +105,13 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    if (error instanceof ApiError && error.status === 503) {
+      return NextResponse.json(
+        { error: "모델 사용량이 많아 일시적으로 응답이 어렵습니다. 잠시 후 다시 시도해주세요." },
+        { status: 503 }
+      )
+    }
+
     const message = error instanceof Error ? error.message : "초안 생성 중 오류가 발생했습니다."
     return NextResponse.json({ error: message }, { status: 500 })
   }
