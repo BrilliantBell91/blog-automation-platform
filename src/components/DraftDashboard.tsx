@@ -3,7 +3,7 @@
 import { useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Loader2, MoreHorizontal, Eye, ExternalLink } from "lucide-react"
+import { Loader2, MoreHorizontal, Eye, ExternalLink, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import { Post, Draft, DraftStatus } from "@/types"
 import { formatDate } from "@/lib/formatters"
@@ -78,8 +78,8 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
     게시완료: items.filter((i) => i.draft?.status === "게시완료").length,
   }
 
-  // 초안 생성
-  async function handleGenerateDraft(post: Post) {
+  // 초안 생성/재생성 (API가 upsert 방식이라 기존 초안이 있어도 그대로 재사용 가능)
+  async function handleGenerateDraft(post: Post, isRegenerate: boolean) {
     setGeneratingIds((prev) => new Set(prev).add(post.id))
 
     try {
@@ -94,7 +94,7 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
         throw new Error(error.error || "초안 생성 실패")
       }
 
-      toast.success(`"${post.title}" 초안이 생성되었습니다`)
+      toast.success(`"${post.title}" 초안이 ${isRegenerate ? "재생성" : "생성"}되었습니다`)
       router.refresh() // Next.js가 서버 컴포넌트 재실행해 새 initialItems 전달
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "초안 생성에 실패했습니다")
@@ -209,7 +209,7 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                         variant="outline"
                         size="sm"
                         className="h-11"
-                        onClick={() => handleGenerateDraft(post)}
+                        onClick={() => handleGenerateDraft(post, false)}
                         disabled={generatingIds.has(post.id)}
                         aria-busy={generatingIds.has(post.id)}
                       >
@@ -250,6 +250,20 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
                           >
                             <ExternalLink className="h-4 w-4" aria-hidden="true" />
                           </Link>
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-11 w-11"
+                          aria-label="초안 재생성"
+                          onClick={() => handleGenerateDraft(post, true)}
+                          disabled={generatingIds.has(post.id)}
+                          aria-busy={generatingIds.has(post.id)}
+                        >
+                          <RefreshCw
+                            className={`h-4 w-4 ${generatingIds.has(post.id) ? "animate-spin" : ""}`}
+                            aria-hidden="true"
+                          />
                         </Button>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>

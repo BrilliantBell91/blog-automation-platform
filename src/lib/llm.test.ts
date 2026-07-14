@@ -3,6 +3,25 @@ import { generateNaverDraft, MODEL_FALLBACK_CHAIN } from "./llm"
 import type { Post } from "@/types"
 
 const generateContentMock = vi.fn()
+const { searchRealImagesMock, verifyImageRelevanceMock } = vi.hoisted(() => ({
+  searchRealImagesMock: vi.fn().mockResolvedValue([]),
+  verifyImageRelevanceMock: vi.fn().mockResolvedValue(true),
+}))
+
+vi.mock("./imageSearch", () => ({
+  searchRealImages: searchRealImagesMock,
+}))
+
+// generateIllustrativeImage는 실제 구현(아래 "@google/genai" 목 기반)을 그대로 쓰고,
+// verifyImageRelevance만 별도로 제어한다(비전 검증 호출까지 실제로 흉내내면 테스트가
+// 지나치게 복잡해지므로).
+vi.mock("./imageGen", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./imageGen")>()
+  return {
+    ...actual,
+    verifyImageRelevance: verifyImageRelevanceMock,
+  }
+})
 
 vi.mock("@google/genai", () => {
   class ApiError extends Error {
@@ -49,8 +68,15 @@ describe("llm", () => {
   }
 
   beforeEach(() => {
+    // clearAllMocks는 호출 기록만 정리하고 구현(mockResolvedValue 등)은 남겨서, 어떤
+    // 테스트가 persistent(non-once)로 설정한 동작이 다음 테스트로 새는 문제가 있었다.
+    // (예: GoogleGenAI 생성자 목처럼 계속 살아있어야 하는 것도 있어 vi.resetAllMocks()는
+    // 쓸 수 없으므로, 문제가 됐던 3개 목만 개별적으로 mockReset한다)
     vi.clearAllMocks()
     delete process.env.LLM_API_KEY
+    generateContentMock.mockReset()
+    searchRealImagesMock.mockReset().mockResolvedValue([])
+    verifyImageRelevanceMock.mockReset().mockResolvedValue(true)
   })
 
   describe("generateNaverDraft", () => {
@@ -325,6 +351,216 @@ describe("llm", () => {
       expect(result).toBe("두 번째 모델이 생성한 초안")
       expect(generateContentMock).toHaveBeenCalledTimes(5)
       expect(generateContentMock.mock.calls[4][0].model).toBe(MODEL_FALLBACK_CHAIN[1])
+    })
+
+    it("사진이 부족하면 서술형 문단 뒤에 AI 생성 이미지가 삽입된다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock
+        .mockResolvedValueOnce({
+          text: "안녕하세요.\n\n첫 번째 이야기.\n\n두 번째 이야기.\n\n마무리 인사.",
+        })
+        .mockResolvedValueOnce({
+          candidates: [
+            { content: { parts: [{ inlineData: { data: "IMG1", mimeType: "image/png" } }] } },
+          ],
+        })
+        .mockResolvedValueOnce({
+          candidates: [
+            { content: { parts: [{ inlineData: { data: "IMG2", mimeType: "image/png" } }] } },
+          ],
+        })
+
+      // mockPost.category === "맛집" (aiImageCount 4) — 후보 문단이 2개뿐이라 둘 다 삽입 대상이 됨
+      const result = await generateNaverDraft(mockPost)
+
+      expect(result).toBe(
+        "안녕하세요.\n\n첫 번째 이야기.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]\n\n두 번째 이야기.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n마무리 인사."
+      )
+      expect(generateContentMock).toHaveBeenCalledTimes(3)
+    })
+
+    it("카테고리 기준 개수만큼 이미 사진이 있으면 추가로 생성하지 않는다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+      })
+
+      const result = await generateNaverDraft({
+        ...mockPost, // 맛집, aiImageCount 4
+        contentAttachments: [
+          { kind: "image", url: "https://example.com/1.jpg" },
+          { kind: "image", url: "https://example.com/2.jpg" },
+          { kind: "image", url: "https://example.com/3.jpg" },
+          { kind: "image", url: "https://example.com/4.jpg" },
+        ],
+      })
+
+      expect(result).toBe("안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.")
+      expect(generateContentMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("이미지 생성에 실패한 자리는 조용히 건너뛰고 나머지 텍스트는 그대로 유지한다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock
+        .mockResolvedValueOnce({
+          text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+        })
+        .mockRejectedValueOnce(new Error("이미지 생성 실패"))
+
+      const result = await generateNaverDraft(mockPost)
+
+      expect(result).toBe("안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.")
+    })
+
+    it("실사 스타일 카테고리는 슬롯마다 다른 검색어로 네이버 이미지 검색을 하고 AI를 호출하지 않는다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock
+        .mockResolvedValueOnce(["https://search.example.com/real1.jpg"])
+        .mockResolvedValueOnce(["https://search.example.com/real2.jpg"])
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기.\n\n두 번째 이야기.\n\n마무리 인사.",
+      })
+
+      // mockPost.category === "맛집" (photo 스타일), tags === ["서울", "카페"]
+      const result = await generateNaverDraft(mockPost)
+
+      expect(result).toBe(
+        "안녕하세요.\n\n첫 번째 이야기.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n두 번째 이야기.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real2.jpg]\n\n마무리 인사."
+      )
+      // 텍스트 생성 1회만 호출되고, 이미지 생성(AI)은 호출되지 않는다
+      expect(generateContentMock).toHaveBeenCalledTimes(1)
+      // 슬롯마다 제목 + 서로 다른 태그를 조합한 검색어를 사용한다(본문과 무관한 이미지 재사용 방지)
+      expect(searchRealImagesMock).toHaveBeenNthCalledWith(1, "테스트 포스트 서울", 5)
+      expect(searchRealImagesMock).toHaveBeenNthCalledWith(2, "테스트 포스트 카페", 5)
+    })
+
+    it("앞 슬롯에서 이미 고른 이미지는 다음 슬롯에서 재사용하지 않는다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock
+        .mockResolvedValueOnce([
+          "https://search.example.com/shared.jpg",
+          "https://search.example.com/onlyA.jpg",
+        ])
+        .mockResolvedValueOnce([
+          "https://search.example.com/shared.jpg",
+          "https://search.example.com/onlyB.jpg",
+        ])
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기.\n\n두 번째 이야기.\n\n마무리 인사.",
+      })
+
+      const result = await generateNaverDraft(mockPost)
+
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/shared.jpg]"
+      )
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/onlyB.jpg]"
+      )
+      expect(result).not.toContain("onlyA.jpg")
+    })
+
+    it("본문과 무관하다고 검증된 후보는 건너뛰고 관련 있는 다음 후보를 사용한다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock.mockResolvedValueOnce([
+        "https://search.example.com/unrelated.jpg",
+        "https://search.example.com/related.jpg",
+      ])
+      verifyImageRelevanceMock
+        .mockResolvedValueOnce(false) // 첫 후보는 본문과 무관
+        .mockResolvedValueOnce(true) // 두 번째 후보는 관련 있음
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+      })
+
+      const result = await generateNaverDraft(mockPost)
+
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/related.jpg]"
+      )
+      expect(result).not.toContain("unrelated.jpg")
+      expect(generateContentMock).toHaveBeenCalledTimes(1) // AI 생성으로 폴백하지 않음
+    })
+
+    it("슬롯당 검증 시도가 3회를 넘으면 AI 생성으로 폴백한다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock.mockResolvedValueOnce([
+        "https://search.example.com/a.jpg",
+        "https://search.example.com/b.jpg",
+        "https://search.example.com/c.jpg",
+        "https://search.example.com/d.jpg",
+      ])
+      verifyImageRelevanceMock.mockResolvedValue(false) // 전부 무관 판정
+      generateContentMock
+        .mockResolvedValueOnce({
+          text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+        })
+        .mockResolvedValueOnce({
+          candidates: [
+            { content: { parts: [{ inlineData: { data: "IMG1", mimeType: "image/png" } }] } },
+          ],
+        })
+
+      const result = await generateNaverDraft(mockPost)
+
+      // 검증은 최대 3장까지만 시도(a, b, c) — 4번째(d)까지 확인하지 않고 AI 생성으로 폴백
+      expect(verifyImageRelevanceMock).toHaveBeenCalledTimes(3)
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]"
+      )
+    })
+
+    it("제목에 [테스트] 같은 대괄호 접두사가 있으면 검색어에서 제거한다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock.mockResolvedValue(["https://search.example.com/real.jpg"])
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+      })
+
+      await generateNaverDraft({ ...mockPost, title: "[테스트] 부평 이자카야 잇키" })
+
+      expect(searchRealImagesMock).toHaveBeenCalledWith("부평 이자카야 잇키 서울", 5)
+    })
+
+    it("검색 결과가 부족하면 나머지만 AI 생성으로 채운다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock
+        .mockResolvedValueOnce(["https://search.example.com/real1.jpg"])
+        .mockResolvedValueOnce([])
+      generateContentMock
+        .mockResolvedValueOnce({
+          text: "안녕하세요.\n\n첫 번째 이야기.\n\n두 번째 이야기.\n\n마무리 인사.",
+        })
+        .mockResolvedValueOnce({
+          candidates: [
+            { content: { parts: [{ inlineData: { data: "IMG2", mimeType: "image/png" } }] } },
+          ],
+        })
+
+      const result = await generateNaverDraft(mockPost)
+
+      expect(result).toBe(
+        "안녕하세요.\n\n첫 번째 이야기.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n두 번째 이야기.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n마무리 인사."
+      )
+      expect(generateContentMock).toHaveBeenCalledTimes(2)
+    })
+
+    it("요약 스타일 카테고리(육아 등)는 이미지 검색을 시도하지 않고 바로 AI로 생성한다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock
+        .mockResolvedValueOnce({
+          text: "안녕하세요.\n\n첫 번째 이야기.\n\n마무리 인사.",
+        })
+        .mockResolvedValueOnce({
+          candidates: [
+            { content: { parts: [{ inlineData: { data: "IMG1", mimeType: "image/png" } }] } },
+          ],
+        })
+
+      await generateNaverDraft({ ...mockPost, category: "육아" })
+
+      expect(searchRealImagesMock).not.toHaveBeenCalled()
+      expect(generateContentMock).toHaveBeenCalledTimes(2)
     })
   })
 })

@@ -6,6 +6,7 @@ import { Copy, Pencil } from "lucide-react"
 import { Draft } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { copyNaverDraftToClipboard } from "@/lib/clipboard"
 
 interface DraftPreviewProps {
   draft: Draft | null
@@ -13,7 +14,7 @@ interface DraftPreviewProps {
 
 async function copyText(text: string) {
   try {
-    await navigator.clipboard.writeText(text)
+    await copyNaverDraftToClipboard(text)
     toast.success("복사되었습니다")
   } catch {
     toast.error("복사에 실패했습니다")

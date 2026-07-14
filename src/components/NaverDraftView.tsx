@@ -1,4 +1,5 @@
 import { Fragment } from "react"
+import { MapPin } from "lucide-react"
 import { NaverDraftBlock, parseNaverDraft } from "@/lib/naverDraftParser"
 import { Badge } from "@/components/ui/badge"
 
@@ -37,12 +38,18 @@ function renderBlock(block: NaverDraftBlock, index: number) {
         </figure>
       )
     case "link":
+      // 실제 게시글처럼 지도 URL을 그대로 노출하지 않고, 장소명 카드 형태의 링크로 보여준다.
       return (
-        <p key={index}>
-          <a href={block.url} target="_blank" rel="noopener noreferrer">
-            {block.url}
-          </a>
-        </p>
+        <a
+          key={index}
+          href={block.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="not-prose my-4 flex items-center gap-2 rounded-lg border bg-muted/40 p-3 text-sm no-underline hover:bg-muted"
+        >
+          <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="font-medium">{block.label}</span>
+        </a>
       )
     case "hashtags":
       return (

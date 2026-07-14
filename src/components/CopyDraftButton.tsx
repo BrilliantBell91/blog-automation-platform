@@ -3,6 +3,7 @@
 import { Copy } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
+import { copyNaverDraftToClipboard } from "@/lib/clipboard"
 
 interface CopyDraftButtonProps {
   content: string
@@ -11,8 +12,8 @@ interface CopyDraftButtonProps {
 export function CopyDraftButton({ content }: CopyDraftButtonProps) {
   async function handleCopy() {
     try {
-      await navigator.clipboard.writeText(content)
-      toast.success("복사되었습니다")
+      await copyNaverDraftToClipboard(content)
+      toast.success("복사되었습니다 (이미지·링크 포함)")
     } catch {
       toast.error("복사에 실패했습니다")
     }
