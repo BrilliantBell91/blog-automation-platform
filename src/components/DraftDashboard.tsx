@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import { Loader2, Pencil, ExternalLink, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import { Post, Draft, DraftStatus } from "@/types"
-import { formatDate } from "@/lib/formatters"
+import { formatDate, extractApiErrorMessage } from "@/lib/formatters"
 import { DRAFT_STATUS } from "@/constants"
 import {
   Table,
@@ -91,8 +91,7 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
       })
 
       if (!res.ok) {
-        const error = await res.json()
-        throw new Error(error.error || "초안 생성 실패")
+        throw new Error(await extractApiErrorMessage(res, "초안 생성 실패"))
       }
 
       toast.success(`"${post.title}" 초안이 ${isRegenerate ? "재생성" : "생성"}되었습니다`)
@@ -118,8 +117,7 @@ export function DraftDashboard({ initialItems }: DraftDashboardProps) {
       })
 
       if (!res.ok) {
-        const error = await res.json()
-        throw new Error(error.error || "상태 변경 실패")
+        throw new Error(await extractApiErrorMessage(res, "상태 변경 실패"))
       }
 
       toast.success("상태가 변경되었습니다")

@@ -5,6 +5,7 @@ import {
   tagsToArray,
   truncateExcerpt,
   encodeUrl,
+  extractApiErrorMessage,
 } from "./formatters"
 
 describe("formatters", () => {
@@ -91,6 +92,34 @@ describe("formatters", () => {
     it("영문은 대부분 그대로 유지된다", () => {
       const result = encodeUrl("restaurant")
       expect(result).toBe("restaurant")
+    })
+  })
+
+  describe("extractApiErrorMessage", () => {
+    it("{ error } JSON 응답이면 그 메시지를 반환한다", async () => {
+      const res = new Response(JSON.stringify({ error: "커스텀 에러" }), { status: 400 })
+      const result = await extractApiErrorMessage(res, "기본 메시지")
+      expect(result).toBe("커스텀 에러")
+    })
+
+    it("Vercel 타임아웃처럼 JSON이 아닌 본문(504)이면 사람이 읽을 수 있는 안내 문구를 반환한다", async () => {
+      // res.json()이 실패해도 res.text()를 다시 호출하지 않고(body stream already
+      // read 방지) 안전하게 폴백하는지가 핵심 - 실측으로 이 순서 버그가 확인됐다.
+      const res = new Response("An error occurred with your deployment", { status: 504 })
+      const result = await extractApiErrorMessage(res, "기본 메시지")
+      expect(result).toContain("시간이 초과")
+    })
+
+    it("JSON도 아니고 504도 아니면 원문 텍스트를 그대로 반환한다", async () => {
+      const res = new Response("Internal Server Error", { status: 500 })
+      const result = await extractApiErrorMessage(res, "기본 메시지")
+      expect(result).toBe("Internal Server Error")
+    })
+
+    it("본문이 완전히 비어있으면 기본 메시지를 반환한다", async () => {
+      const res = new Response("", { status: 500 })
+      const result = await extractApiErrorMessage(res, "기본 메시지")
+      expect(result).toBe("기본 메시지")
     })
   })
 })

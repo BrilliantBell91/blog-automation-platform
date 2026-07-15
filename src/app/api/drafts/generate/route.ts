@@ -11,10 +11,13 @@ import type { GenerateDraftResponse } from "@/types/api"
 import type { DraftStatus } from "@/types"
 
 export const dynamic = "force-dynamic"
-// 이미지 소싱(장소사진/네이버·구글 검색/관련성 검증/AI 생성)까지 포함하면 처리 시간이
-// 길어질 수 있어 Vercel Hobby 플랜에서 설정 가능한 사실상 최대값으로 늘린다.
-// (실제 상한은 플랜 정책에 따라 달라질 수 있으니 Vercel 대시보드에서 재확인 권장)
-export const maxDuration = 60
+// Vercel 공식 문서(2026-07-01 기준) 확인 결과, fluid compute가 기본 활성화된 Hobby
+// 플랜은 함수 실행시간 기본값이자 최대값이 이미 300초(5분)다. 예전에 "Hobby는 60초가
+// 상한일 것"이라 잘못 추정해 여기 60을 명시했다가, 오히려 기본값(300초)보다 짧게
+// 강제로 깎아버려서 실제로 504(Vercel Runtime Timeout)를 유발한 사고가 확인되어
+// 되돌린다. 이미지 소싱(장소사진/네이버·구글 검색/관련성 검증/AI 생성)까지 포함하면
+// 처리 시간이 꽤 걸릴 수 있으므로, Hobby 최대값인 300에 맞춰 명시적으로 설정해둔다.
+export const maxDuration = 300
 
 export async function POST(request: NextRequest) {
   // 인증 체크
