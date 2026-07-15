@@ -108,6 +108,26 @@ export function PostBody({ blocks, fallbackContent, pageId }: PostBodyProps) {
                 />
               </div>
             )
+          case "bookmark":
+          case "link_preview":
+          case "embed":
+            if (!block.linkUrl) return null
+            return (
+              <a
+                key={block.id}
+                href={block.linkUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block my-4 p-4 border rounded-lg bg-muted hover:bg-muted/80 transition-colors"
+              >
+                <div className="text-sm font-medium text-muted-foreground mb-1">
+                  {block.type === "embed" ? "임베드 콘텐츠" : "참고 링크"}
+                </div>
+                <div className="text-base font-semibold text-foreground break-words">
+                  {block.content || block.linkUrl}
+                </div>
+              </a>
+            )
           default:
             return null
         }

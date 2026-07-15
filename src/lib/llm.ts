@@ -4,6 +4,7 @@ import { GEMINI_RATE_LIMIT } from "@/constants"
 import {
   generateAiImage,
   verifyImageRelevance,
+  type IllustrativeImageStyle,
 } from "./imageGen"
 import { searchRealImages } from "./imageSearch"
 import { searchNaverPlace } from "./naverLocalSearch"
@@ -67,12 +68,14 @@ const CATEGORY_STYLE_NOTES: Record<
     naverCategoryLabel: string
     notes: string
     aiImageCount: number
+    imagesPerParagraphs: number
     allowAiFallback: boolean
   }
 > = {
   결혼: {
     naverCategoryLabel: "결혼일지(۶•̀ᴗ•́)۶",
     aiImageCount: 1,
+    imagesPerParagraphs: 5,
     allowAiFallback: true,
     notes: `- 혼인신고, 웨딩홀 비교 등 절차/정보 안내형 글이 많은 카테고리입니다.
 - 소제목은 반드시 그 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙여서 표시하세요. \`<blockquote>\`, \`</blockquote>\` 같은 HTML 태그는 절대 쓰지 마세요.
@@ -84,6 +87,7 @@ const CATEGORY_STYLE_NOTES: Record<
   육아: {
     naverCategoryLabel: "아가야 안녕(•ө•)♡",
     aiImageCount: 1,
+    imagesPerParagraphs: 5,
     allowAiFallback: true,
     notes: `- 육아휴직/출산휴가 신청 같은 절차·서류 안내형 글이 많은 카테고리입니다.
 - 소제목은 반드시 그 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙여서 표시하세요. \`<blockquote>\`, \`</blockquote>\` 같은 HTML 태그는 절대 쓰지 마세요.
@@ -94,6 +98,7 @@ const CATEGORY_STYLE_NOTES: Record<
   나들이: {
     naverCategoryLabel: "나들이일지(˘▾˘)~",
     aiImageCount: 4,
+    imagesPerParagraphs: 3,
     allowAiFallback: false,
     notes: `- 방문한 장소(숙소, 시설, 여행지 등) 후기 글입니다.
 - 글 상단에 주소/전화/영업시간/주차 등 기본 정보를 정리하세요. 각 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙이면 되고, \`<blockquote>\` 같은 HTML 태그는 쓰지 마세요.
@@ -103,6 +108,7 @@ const CATEGORY_STYLE_NOTES: Record<
   맛집: {
     naverCategoryLabel: "욤뇸뇸일지(˘༥˘ )",
     aiImageCount: 4,
+    imagesPerParagraphs: 3,
     allowAiFallback: false,
     notes: `- 방문한 맛집/카페 후기 글입니다.
 - 글 상단에 주소/전화/영업시간/주차 등 기본 정보를 정리하세요. 각 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙이면 되고, \`<blockquote>\` 같은 HTML 태그는 쓰지 마세요.
@@ -112,6 +118,7 @@ const CATEGORY_STYLE_NOTES: Record<
   기타: {
     naverCategoryLabel: "일상/꿀팁일지(ᐢ ̫ᐢ)",
     aiImageCount: 2,
+    imagesPerParagraphs: 5,
     allowAiFallback: true,
     notes: `- 일상 공유, 정보/꿀팁, 이벤트·혜택 공유 등 다양한 글이 섞여 있는 카테고리입니다.
 - 이벤트/혜택 공유 글이면 "~공유드립니닷", "신청ㄱㄱ!" 같은 캐주얼한 독려 문구와 링크를 자연스럽게 넣어도 됩니다.
@@ -284,12 +291,9 @@ const MARKER_PARAGRAPH = /^\[(사진 원본|참고링크)/
 // 전혀 무관한 결과(인물 클로즈업 등)로 나오는 사고가 실측으로 확인됐다.
 const MIN_VISUAL_PARAGRAPH_LENGTH = 40
 
-// AI 생성 이미지를 끼워넣을 문단 위치를 고른다. 인사말(첫 문단)/마무리·해시태그(마지막 문단),
-// 인용구·해시태그 줄, 이미 사진/링크 마커인 문단, 장면 설명으로 쓰기엔 너무 짧은 문단은
-// 후보에서 제외하고, 남은 "서술형" 문단 중 균등한 간격으로 count개를 고른다. (지시문만으로
-// LLM에게 위치 표시를 맡겼을 때 실제로는 자주 무시되는 것을 확인해서, 생성된 텍스트를
-// 후처리하는 결정론적 방식으로 전환함)
-function selectImageInsertionPoints(paragraphs: string[], count: number): number[] {
+// 이미지 슬롯으로 쓸 수 있는 문단을 필터링한다. 인사말(첫 문단)/마무리·해시태그(마지막 문단),
+// 인용구·해시태그 줄, 이미 사진/링크 마커인 문단, 장면 설명으로 쓰기엔 너무 짧은 문단은 제외한다.
+function getVisualParagraphCandidates(paragraphs: string[]): number[] {
   const candidates: number[] = []
   paragraphs.forEach((raw, i) => {
     const p = raw.trim()
@@ -298,7 +302,11 @@ function selectImageInsertionPoints(paragraphs: string[], count: number): number
     if (p.length < MIN_VISUAL_PARAGRAPH_LENGTH) return
     candidates.push(i)
   })
+  return candidates
+}
 
+// 이미지 슬롯을 삽입할 문단 위치를 고른다. 후보 문단 중 균등한 간격으로 count개를 고른다.
+function selectImageInsertionPoints(candidates: number[], count: number): number[] {
   if (candidates.length === 0 || count <= 0) return []
   if (candidates.length <= count) return candidates
 
@@ -343,10 +351,29 @@ async function pickVerifiedCandidate(
   return { pick: null, attemptsUsed }
 }
 
+// AI 이미지를 생성하고 관련성을 검증해 통과한 이미지를 반환한다. 1회 생성 후
+// 검증 실패 시 1회 재생성해 다시 검증하고, 그래도 실패하면 null을 반환한다.
+async function generateVerifiedAiImage(
+  apiKey: string,
+  description: string,
+  style: IllustrativeImageStyle
+): Promise<string | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const imageUrl = await generateAiImage(apiKey, description, style)
+    if (!imageUrl) continue
+    const relevance = await verifyImageRelevance(apiKey, imageUrl, description)
+    if (relevance === "relevant") return imageUrl
+    if (relevance === "unknown") {
+      console.warn("[llm] AI 생성 이미지 검증 불가(모델 호출 실패) - 안전하게 건너뜀")
+    }
+  }
+  return null
+}
+
 // 부족한 이미지 개수를 채운다. 모든 카테고리가 동일한 파이프라인을 따른다:
 // (1) 첨부된 지도 URL의 place ID로 그 장소의 실제 사진(업체 등록/방문자 인증 사진) 시도
 // (2) 그걸로 못 채우면 슬롯마다 다른 검색어로 네이버 이미지 검색 시도
-// (3) allowAiFallback=true인 카테고리만, 그래도 못 채운 나머지를 AI로 생성
+// (3) allowAiFallback=true인 카테고리만, 그래도 못 채운 나머지를 검증 후 AI로 생성
 // allowAiFallback=false인 카테고리(나들이/맛집)는 (1)+(2)로 채우지 못한 슬롯을 비워둔다.
 // place ID 기반 사진은 첨부 링크가 가리키는 바로 그 장소의 사진이라 검색과 달리
 // 다른 장소 사진이 섞일 일이 없다(실측 확인된 문제 - 이자카야 글에 검색으로 찾은
@@ -361,34 +388,35 @@ async function resolveShortfallImages(
   placeId: string | null
 ): Promise<(string | null)[]> {
   const cleanTitle = cleanTitleForSearch(postTitle)
-  const placePhotos = placeId ? await fetchNaverPlacePhotos(placeId, points.length * 3) : []
+  const placePhotos = placeId ? await fetchNaverPlacePhotos(placeId, points.length * 5) : []
 
-  // 슬롯마다 (1) 첨부 지도 URL의 place 사진, (2) 검색 결과 순으로 후보를 시도한다. 앞
-  // 슬롯에서 이미 고른 이미지는 건너뛰고, 비전 모델로 그 문단 내용과 실제로 관련 있는지,
-  // 그리고 특정 인물이 주요 피사체이거나 상호명·광고 문구·워터마크 등 텍스트가 박혀 있지는
-  // 않은지 검증해 통과한 첫 후보만 쓴다. 유명하지 않은 가게일수록 검색 결과에 무관한
-  // 사진이 섞여 나오고, 타인의 개인 사진이나 대여점 광고 이미지가 그대로 쓰이는 사고가
-  // 실측으로 확인되어, 검증 없이는(모델 호출 자체가 실패해 답을 못 받은 "unknown" 포함)
-  // 신뢰할 수 없다고 판단해 후보를 사용하지 않는다. 비용을 고려해 슬롯당 검증 시도는
-  // 최대 3장(place+검색 합산)으로 제한하고, allowAiFallback=true인 경우만 AI 생성으로 폴백한다.
-  const MAX_VERIFY_ATTEMPTS_PER_SLOT = 3
+  // 검증 시도를 두 단계로 나눠 place/search 각각에 최소 예산을 보장하고,
+  // 전체 예산을 늘린다 (3 → 6).
+  const MAX_VERIFY_ATTEMPTS_PER_SLOT = 6
+  const MIN_ATTEMPTS_PER_SOURCE = 2
   const usedUrls = new Set<string>()
   const results: (string | null)[] = []
+
   for (let i = 0; i < points.length; i++) {
     const description = paragraphs[points[i]].slice(0, 60)
 
+    // (1) place 사진 시도 (최소 MIN_ATTEMPTS_PER_SOURCE회)
     const fromPlace = await pickVerifiedCandidate(
       placePhotos,
       usedUrls,
       description,
       apiKey,
-      MAX_VERIFY_ATTEMPTS_PER_SLOT
+      MIN_ATTEMPTS_PER_SOURCE
     )
     let pick = fromPlace.pick
-    const remaining = MAX_VERIFY_ATTEMPTS_PER_SLOT - fromPlace.attemptsUsed
+    let remaining = MAX_VERIFY_ATTEMPTS_PER_SLOT - fromPlace.attemptsUsed
 
-    if (!pick && remaining > 0) {
-      const searchCandidates = await searchRealImages(buildImageSearchQuery(cleanTitle, tags, i), 5)
+    // (2) 검색 시도 (나머지 예산, 최소 MIN_ATTEMPTS_PER_SOURCE회)
+    if (!pick && remaining >= MIN_ATTEMPTS_PER_SOURCE) {
+      const searchCandidates = await searchRealImages(
+        buildImageSearchQuery(cleanTitle, tags, i),
+        8
+      )
       const fromSearch = await pickVerifiedCandidate(
         searchCandidates,
         usedUrls,
@@ -406,6 +434,7 @@ async function resolveShortfallImages(
   // allowAiFallback=false인 경우(나들이/맛집)는 여기서 반환. AI 생성은 하지 않음.
   if (!allowAiFallback) return results
 
+  // (3) AI 생성 (allowAiFallback=true인 경우만)
   const missingIndexes = results
     .map((v, i) => (v === null ? i : -1))
     .filter((i) => i >= 0)
@@ -413,7 +442,7 @@ async function resolveShortfallImages(
   if (missingIndexes.length > 0) {
     const generated = await Promise.all(
       missingIndexes.map((i) =>
-        generateAiImage(apiKey, paragraphs[points[i]].slice(0, 60), "summary")
+        generateVerifiedAiImage(apiKey, paragraphs[points[i]].slice(0, 60), "summary")
       )
     )
     missingIndexes.forEach((i, k) => {
@@ -433,14 +462,22 @@ async function resolveShortfallImages(
 async function insertImages(text: string, apiKey: string, post: Post): Promise<string> {
   const attachments = (post.contentAttachments ?? []).filter((a) => a.kind === "image")
   const entry = post.category ? CATEGORY_STYLE_NOTES[post.category] : undefined
-  const targetCount = entry?.aiImageCount ?? DEFAULT_AI_IMAGE_COUNT
   const allowAiFallback = entry?.allowAiFallback ?? DEFAULT_ALLOW_AI_FALLBACK
+
+  const paragraphs = text.split("\n\n")
+  const candidates = getVisualParagraphCandidates(paragraphs)
+
+  // 이미지 목표 개수를 "카테고리 최소값" 또는 "글 길이 기반값" 중 더 큰 값으로 결정
+  const minImageCount = entry?.aiImageCount ?? DEFAULT_AI_IMAGE_COUNT
+  const imagesPerParagraphs = entry?.imagesPerParagraphs ?? 5
+  const lengthBasedCount = Math.ceil(candidates.length / imagesPerParagraphs)
+  const targetCount = Math.max(minImageCount, lengthBasedCount)
+
   const shortfall = Math.max(targetCount - attachments.length, 0)
   const totalSlots = attachments.length + shortfall
   if (totalSlots === 0) return text
 
-  const paragraphs = text.split("\n\n")
-  const points = selectImageInsertionPoints(paragraphs, totalSlots)
+  const points = selectImageInsertionPoints(candidates, totalSlots)
   if (points.length === 0) return text
 
   const mapLink = (post.contentAttachments ?? []).find(

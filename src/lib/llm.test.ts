@@ -572,8 +572,8 @@ describe("llm", () => {
       // 텍스트 생성 1회만 호출되고, 이미지 생성(AI)은 호출되지 않는다
       expect(generateContentMock).toHaveBeenCalledTimes(1)
       // 슬롯마다 제목 + 서로 다른 태그를 조합한 검색어를 사용한다(본문과 무관한 이미지 재사용 방지)
-      expect(searchRealImagesMock).toHaveBeenNthCalledWith(1, "테스트 포스트 서울", 5)
-      expect(searchRealImagesMock).toHaveBeenNthCalledWith(2, "테스트 포스트 카페", 5)
+      expect(searchRealImagesMock).toHaveBeenNthCalledWith(1, "테스트 포스트 서울", 8)
+      expect(searchRealImagesMock).toHaveBeenNthCalledWith(2, "테스트 포스트 카페", 8)
     })
 
     it("첨부 지도 URL에 place ID가 있으면 키워드 검색보다 그 장소의 실제 사진을 먼저 쓴다", async () => {
@@ -670,7 +670,7 @@ describe("llm", () => {
       expect(generateContentMock).toHaveBeenCalledTimes(2) // 텍스트 생성 + AI 이미지 생성 폴백
     })
 
-    it("슬롯당 검증 시도가 3회를 넘으면 AI 생성으로 폴백한다 (allowAiFallback=true인 경우만)", async () => {
+    it("슬롯당 검증 시도가 최대값(6회)를 넘으면 AI 생성으로 폴백한다 (allowAiFallback=true인 경우만)", async () => {
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock.mockResolvedValueOnce([
         "https://search.example.com/a.jpg",
@@ -678,7 +678,12 @@ describe("llm", () => {
         "https://search.example.com/c.jpg",
         "https://search.example.com/d.jpg",
       ])
-      verifyImageRelevanceMock.mockResolvedValue("irrelevant") // 전부 무관 판정
+      verifyImageRelevanceMock
+        .mockResolvedValueOnce("irrelevant") // 첫 4회 모두 무관 판정
+        .mockResolvedValueOnce("irrelevant")
+        .mockResolvedValueOnce("irrelevant")
+        .mockResolvedValueOnce("irrelevant")
+        .mockResolvedValueOnce("relevant") // AI 생성 이미지는 통과
       generateContentMock
         .mockResolvedValueOnce({
           text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
@@ -691,8 +696,8 @@ describe("llm", () => {
 
       const result = await generateNaverDraft({ ...mockPost, category: "기타" })
 
-      // 검증은 최대 3장까지만 시도(a, b, c) — 4번째(d)까지 확인하지 않고 AI 생성으로 폴백
-      expect(verifyImageRelevanceMock).toHaveBeenCalledTimes(3)
+      // 검증은 총 5회: search 결과 4개 + AI 생성 이미지 1회
+      expect(verifyImageRelevanceMock).toHaveBeenCalledTimes(5)
       expect(result).toContain(
         "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]"
       )
@@ -707,7 +712,7 @@ describe("llm", () => {
 
       await generateNaverDraft({ ...mockPost, title: "[테스트] 부평 이자카야 잇키" })
 
-      expect(searchRealImagesMock).toHaveBeenCalledWith("부평 이자카야 잇키 서울", 5)
+      expect(searchRealImagesMock).toHaveBeenCalledWith("부평 이자카야 잇키 서울", 8)
     })
 
     it("검색 결과가 부족하면 나머지만 AI 생성으로 채운다 (allowAiFallback=true인 경우만)", async () => {
