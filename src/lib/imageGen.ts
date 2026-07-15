@@ -3,7 +3,7 @@
 // 호출하는 쪽(llm.ts)에서 일반적인 분위기 설명만 전달해야 한다.
 
 import { GoogleGenAI } from "@google/genai"
-import { withRetry } from "./geminiRetry"
+import { withRetry, shouldTryNextModel } from "./geminiRetry"
 
 const IMAGE_MODEL = "gemini-2.5-flash-image"
 
@@ -15,12 +15,50 @@ function buildStyleInstruction(style: IllustrativeImageStyle): string {
     : "실사 사진 느낌으로 만들어주세요."
 }
 
+// Gemini 이미지 생성 모델(gemini-2.5-flash-image)은 무료 티어에서 완전히 막혀있음이
+// 실측으로 확인됐다(Google API 응답: "limit: 0, model: gemini-2.5-flash-preview-image" —
+// 할당량 소진이 아니라 결제 미연동 시 애초에 호출 자체가 불가능). 결제 연동 전까지는
+// 키가 필요 없는 무료 서비스인 Pollinations.ai(flux 모델)로 폴백해 최소한 이미지가
+// 비는 것은 막는다. Gemini 결제가 연동되면 자동으로 다시 Gemini 결과를 우선 사용한다.
+const POLLINATIONS_BASE_URL = "https://image.pollinations.ai/prompt"
+const POLLINATIONS_MODEL = "flux"
+const POLLINATIONS_TIMEOUT_MS = 20_000
+
+async function generateImageWithPollinations(
+  description: string,
+  style: IllustrativeImageStyle
+): Promise<string | null> {
+  try {
+    // 설명이 짧거나 장면 정보가 부족하면 flux가 본문과 무관한 인물 클로즈업 사진으로
+    // 대체하는 경향이 실측으로 확인되어(예: 놀이공원 후기 글에 뜬금없는 인물 초상 사진),
+    // 인물 클로즈업/초상 사진은 만들지 말라고 명시적으로 지시한다. safe=true로 선정성
+    // 있는 결과도 함께 걸러낸다. (이후 verifyImageRelevance()로 한 번 더 검증된다.)
+    const prompt = `${buildStyleInstruction(style)} ${description}. 인물 클로즈업이나 얼굴이 크게 나오는 초상 사진은 만들지 말고, 풍경·사물·분위기 위주로 표현해주세요. 텍스트나 워터마크, 로고 없이.`
+    const seed = Math.floor(Math.random() * 1_000_000)
+    const url = `${POLLINATIONS_BASE_URL}/${encodeURIComponent(prompt)}?model=${POLLINATIONS_MODEL}&width=1024&height=768&nologo=true&safe=true&seed=${seed}`
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), POLLINATIONS_TIMEOUT_MS)
+    try {
+      const res = await fetch(url, { signal: controller.signal })
+      if (!res.ok) return null
+      const contentType = res.headers.get("content-type") || ""
+      if (!contentType.startsWith("image/")) return null
+      return url
+    } finally {
+      clearTimeout(timeout)
+    }
+  } catch (error) {
+    console.warn("[imageGen] Pollinations 이미지 생성 실패", error)
+    return null
+  }
+}
+
 /**
- * 장면 설명을 받아 이미지를 생성하고 data URI로 반환한다. 품질 문제로 무료
- * 대체 서비스(Pollinations 등)는 쓰지 않고 전적으로 Gemini에만 맡긴다 —
- * 대신 429(할당량)/503(과부하)은 withRetry로 재시도해 일시적 실패를 흡수한다.
- * 재시도 후에도 실패하면(할당량 완전 소진 등) null을 반환한다 — 호출부에서 해당
- * 자리를 조용히 제거한다.
+ * 장면 설명을 받아 이미지를 생성하고 data URI로 반환한다. 429(할당량)/503(과부하)은
+ * withRetry로 재시도해 일시적 실패를 흡수한다. 재시도 후에도 실패하면(할당량 완전
+ * 소진, 결제 미연동으로 인한 접근 불가 등) null을 반환한다 — 호출부(generateAiImage)가
+ * Pollinations로 폴백하거나, 그마저 실패하면 해당 자리를 조용히 제거한다.
  * style: "summary"는 정보/절차성 글(결혼·육아 등)용 인포그래픽 스타일, "photo"는 방문 후기성
  * 글(나들이·맛집 등)용 실사 사진 스타일.
  */
@@ -57,19 +95,34 @@ ${buildStyleInstruction(style)}
   }
 }
 
-// resolveShortfallImages()의 실질적인 진입점. 과거에는 Gemini 실패 시 Pollinations로
-// 폴백했으나 결과물 품질이 낮아 제거했다 — 전적으로 Gemini만 사용한다.
+/**
+ * 이미지 생성 진입점. Gemini를 우선 시도하고(결제 연동 시 더 좋은 품질), Gemini가
+ * 실패하면(현재는 무료 티어 미지원으로 항상 실패) Pollinations로 폴백한다.
+ */
 export async function generateAiImage(
   apiKey: string,
   description: string,
   style: IllustrativeImageStyle = "photo"
 ): Promise<string | null> {
-  return generateIllustrativeImage(apiKey, description, style)
+  const geminiImage = await generateIllustrativeImage(apiKey, description, style)
+  if (geminiImage) return geminiImage
+  return generateImageWithPollinations(description, style)
 }
 
 // 검색으로 찾은 이미지가 실제로 특정 가게/장소의 사진이라는 보장이 없어서(유명하지 않은
 // 곳일수록 무관한 사진이 섞여 나옴), 비전 모델로 본문 설명과 실제로 관련 있는지 검증한다.
-const VERIFY_MODEL = "gemini-3-flash-preview"
+// 슬롯당 최대 6회까지 호출될 수 있어 텍스트 생성(llm.ts의 MODEL_FALLBACK_CHAIN, 1순위
+// gemini-3-flash-preview)과 같은 모델을 쓰면 무료 티어 일일 한도(실측 확인: 20회/일,
+// gemini-3-flash-preview와 gemini-3-flash가 같은 할당량 풀 공유)를 검증 호출만으로
+// 순식간에 소진시켜 텍스트 생성까지 막히고, 결국 검증을 통과하는 후보가 하나도 없어
+// 검색/AI 이미지가 전부 빠지는 사고가 실측으로 확인됐다. 텍스트 생성과 겹치지 않는
+// 모델을 우선순위로 두고, 전부 실패하면 마지막으로 gemini-3-flash-preview도 시도한다.
+const VERIFY_MODEL_FALLBACK_CHAIN = [
+  "gemini-2.0-flash",
+  "gemini-flash-latest",
+  "gemini-3.1-flash-lite",
+  "gemini-3-flash-preview",
+] as const
 
 // "irrelevant"는 모델이 실제로 "무관하다/부적절하다"고 답한 경우, "unknown"은 검증
 // 자체(할당량 소진 등)가 실패해 답을 못 받은 경우다. 검증을 못 한 "unknown"도
@@ -122,26 +175,36 @@ export async function verifyImageRelevance(
     return "irrelevant" // 후보 자체를 못 받았으니 안전하게 사용하지 않는다
   }
 
-  try {
-    const ai = new GoogleGenAI({ apiKey })
-    const response = await withRetry(() =>
-      ai.models.generateContent({
-        model: VERIFY_MODEL,
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { inlineData: { mimeType, data: base64 } },
-              { text: buildVerifyPrompt(description, source) },
-            ],
-          },
-        ],
-      })
-    )
+  const ai = new GoogleGenAI({ apiKey })
+  let lastError: unknown
+  for (const model of VERIFY_MODEL_FALLBACK_CHAIN) {
+    try {
+      const response = await withRetry(() =>
+        ai.models.generateContent({
+          model,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { inlineData: { mimeType, data: base64 } },
+                { text: buildVerifyPrompt(description, source) },
+              ],
+            },
+          ],
+        })
+      )
 
-    return (response.text ?? "").trim().startsWith("예") ? "relevant" : "irrelevant"
-  } catch (error) {
-    console.warn("[imageGen] 이미지 관련성 검증(모델 호출) 실패 - 확인 불가로 처리", error)
-    return "unknown"
+      return (response.text ?? "").trim().startsWith("예") ? "relevant" : "irrelevant"
+    } catch (error) {
+      if (!shouldTryNextModel(error)) {
+        console.warn("[imageGen] 이미지 관련성 검증(모델 호출) 실패 - 확인 불가로 처리", error)
+        return "unknown"
+      }
+      console.warn(`[imageGen] ${model} 사용 불가(할당량 소진/미지원) — 다음 모델로 전환`, error)
+      lastError = error
+    }
   }
+
+  console.warn("[imageGen] 이미지 관련성 검증 - 모든 모델 할당량 소진, 확인 불가로 처리", lastError)
+  return "unknown"
 }

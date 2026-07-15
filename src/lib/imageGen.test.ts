@@ -31,11 +31,12 @@ describe("imageGen", () => {
     generateContentMock.mockReset()
   })
 
-  // 이미지 생성은 품질 문제로 무료 대체 서비스(Pollinations 등)를 쓰지 않고 전적으로
-  // Gemini에만 맡긴다. 429/503(일시적 오류)은 withRetry로 재시도하고, 그래도 실패하면
-  // 조용히 null을 반환한다(호출부가 해당 자리를 비운다).
+  // 이미지 생성은 Gemini를 우선 시도한다(429/503은 withRetry로 재시도). Gemini가
+  // 결제 미연동 등으로 계속 실패하면(무료 티어에서 gemini-2.5-flash-image의 실제 한도가
+  // 0임이 실측 확인됨) 키가 필요 없는 무료 서비스인 Pollinations로 폴백해 이미지가
+  // 완전히 비는 것은 막는다. 둘 다 실패하면 null(호출부가 해당 자리를 비운다).
   describe("generateAiImage", () => {
-    it("Gemini 응답이 성공하면 해당 data URI를 그대로 반환한다", async () => {
+    it("Gemini 응답이 성공하면 해당 data URI를 그대로 반환한다 (Pollinations 호출 안 함)", async () => {
       generateContentMock.mockResolvedValueOnce({
         candidates: [
           {
@@ -50,6 +51,7 @@ describe("imageGen", () => {
 
       expect(result).toBe("data:image/png;base64,base64data")
       expect(generateContentMock).toHaveBeenCalledTimes(1)
+      expect(fetchMock).not.toHaveBeenCalled()
     })
 
     it("429(할당량) 에러가 재시도 중 정상 응답으로 회복되면 결과를 반환한다", async () => {
@@ -72,34 +74,57 @@ describe("imageGen", () => {
       vi.useRealTimers()
     })
 
-    it("429 에러가 재시도 후에도 계속되면 null을 반환한다", async () => {
+    it("Gemini가 재시도 후에도 계속 실패하면 Pollinations로 폴백한다", async () => {
       vi.useFakeTimers()
       const { ApiError } = await import("@google/genai")
-      generateContentMock.mockRejectedValue(new ApiError({ message: "Too Many Requests", status: 429 }))
+      generateContentMock.mockRejectedValue(
+        new ApiError({ message: "quota exceeded (limit: 0)", status: 429 })
+      )
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => "image/jpeg" },
+      })
 
       const promise = generateAiImage("test-key", "설명", "photo")
       await vi.runAllTimersAsync()
       const result = await promise
 
-      // 최초 시도 + GEMINI_RATE_LIMIT.MAX_RETRIES(3) 재시도 = 4회
+      // 최초 시도 + GEMINI_RATE_LIMIT.MAX_RETRIES(3) 재시도 = 4회, 그 다음 Pollinations
       expect(generateContentMock).toHaveBeenCalledTimes(4)
-      expect(result).toBeNull()
+      expect(result).toMatch(/^https:\/\/image\.pollinations\.ai\/prompt\//)
       vi.useRealTimers()
     })
 
-    it("재시도 대상이 아닌 예외(일반 네트워크 에러 등)는 즉시 null을 반환한다(재시도 없음)", async () => {
+    it("재시도 대상이 아닌 예외(일반 네트워크 에러 등)는 Gemini를 즉시 포기하고(재시도 없음) Pollinations로 폴백한다", async () => {
       generateContentMock.mockRejectedValueOnce(new Error("network error"))
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => "image/jpeg" },
+      })
 
       const result = await generateAiImage("test-key", "설명", "summary")
 
-      expect(result).toBeNull()
       expect(generateContentMock).toHaveBeenCalledTimes(1)
+      expect(result).toMatch(/^https:\/\/image\.pollinations\.ai\/prompt\//)
     })
 
-    it("Gemini가 이미지 파트 없는 응답을 반환하면 null을 반환한다", async () => {
+    it("Gemini가 이미지 파트 없는 응답을 반환하면 Pollinations로 폴백한다", async () => {
       generateContentMock.mockResolvedValueOnce({
         candidates: [{ content: { parts: [] } }],
       })
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => "image/jpeg" },
+      })
+
+      const result = await generateAiImage("test-key", "설명", "photo")
+
+      expect(result).toMatch(/^https:\/\/image\.pollinations\.ai\/prompt\//)
+    })
+
+    it("Gemini와 Pollinations 모두 실패하면 null을 반환한다", async () => {
+      generateContentMock.mockRejectedValueOnce(new Error("network error"))
+      fetchMock.mockResolvedValueOnce({ ok: false })
 
       const result = await generateAiImage("test-key", "설명", "photo")
 
@@ -143,13 +168,55 @@ describe("imageGen", () => {
       expect(generateContentMock).not.toHaveBeenCalled()
     })
 
-    it("검증 모델 호출이 실패(할당량 소진 등)하면 unknown을 반환한다", async () => {
+    it("검증 모델 호출이 재시도 대상이 아닌 예외로 실패하면 unknown을 반환한다(다른 모델로 넘어가지 않음)", async () => {
       mockImageDownloadOk()
       generateContentMock.mockRejectedValueOnce(new Error("quota exceeded"))
 
       const result = await verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
 
       expect(result).toBe("unknown")
+      expect(generateContentMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("첫 번째 검증 모델이 자체 재시도까지 모두 소진하면 다음 모델로 자동 전환한다", async () => {
+      vi.useFakeTimers()
+      mockImageDownloadOk()
+      const { ApiError } = await import("@google/genai")
+      const quotaError = () => new ApiError({ message: "Too Many Requests", status: 429 })
+      // 첫 모델: 최초 시도 + withRetry 자체 재시도(MAX_RETRIES=3) = 4회 모두 실패
+      generateContentMock
+        .mockRejectedValueOnce(quotaError())
+        .mockRejectedValueOnce(quotaError())
+        .mockRejectedValueOnce(quotaError())
+        .mockRejectedValueOnce(quotaError())
+        // 두 번째 모델: 첫 시도에 성공
+        .mockResolvedValueOnce({ text: "예" })
+
+      const promise = verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
+      await vi.runAllTimersAsync()
+      const result = await promise
+
+      expect(result).toBe("relevant")
+      expect(generateContentMock).toHaveBeenCalledTimes(5)
+      vi.useRealTimers()
+    })
+
+    it("모든 검증 모델이 할당량 소진이면 unknown을 반환한다", async () => {
+      vi.useFakeTimers()
+      mockImageDownloadOk()
+      const { ApiError } = await import("@google/genai")
+      generateContentMock.mockRejectedValue(
+        new ApiError({ message: "Too Many Requests", status: 429 })
+      )
+
+      const promise = verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
+      await vi.runAllTimersAsync()
+      const result = await promise
+
+      expect(result).toBe("unknown")
+      // VERIFY_MODEL_FALLBACK_CHAIN 4개 모델 × 모델당 최초시도+재시도 4회 = 16회
+      expect(generateContentMock).toHaveBeenCalledTimes(16)
+      vi.useRealTimers()
     })
   })
 })
