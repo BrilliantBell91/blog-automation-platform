@@ -444,7 +444,7 @@ describe("llm", () => {
       expect(generateContentMock.mock.calls[4][0].model).toBe(MODEL_FALLBACK_CHAIN[1])
     })
 
-    it("사진이 부족하면 서술형 문단 뒤에 AI 생성 이미지가 삽입된다", async () => {
+    it("사진이 부족하면 서술형 문단 뒤에 AI 생성 이미지가 삽입된다 (allowAiFallback=true인 카테고리만)", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock
         .mockResolvedValueOnce({
@@ -461,8 +461,8 @@ describe("llm", () => {
           ],
         })
 
-      // mockPost.category === "맛집" (aiImageCount 4) — 후보 문단이 2개뿐이라 둘 다 삽입 대상이 됨
-      const result = await generateNaverDraft(mockPost)
+      // category="기타" (allowAiFallback=true, aiImageCount=2) — 후보 문단이 2개뿐이라 둘 다 삽입 대상이 됨
+      const result = await generateNaverDraft({ ...mockPost, category: "기타" })
 
       expect(result).toBe(
         "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n마무리 인사."
@@ -554,7 +554,7 @@ describe("llm", () => {
       expect(result).toBe("안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.")
     })
 
-    it("실사 스타일 카테고리는 슬롯마다 다른 검색어로 네이버 이미지 검색을 하고 AI를 호출하지 않는다", async () => {
+    it("allowAiFallback=false 카테고리(나들이/맛집)는 슬롯마다 다른 검색어로 네이버 이미지 검색을 하되 AI 폴백을 하지 않는다", async () => {
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock
         .mockResolvedValueOnce(["https://search.example.com/real1.jpg"])
@@ -563,7 +563,7 @@ describe("llm", () => {
         text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
-      // mockPost.category === "맛집" (photo 스타일), tags === ["서울", "카페"]
+      // mockPost.category === "맛집" (allowAiFallback=false), tags === ["서울", "카페"]
       const result = await generateNaverDraft(mockPost)
 
       expect(result).toBe(
@@ -647,7 +647,7 @@ describe("llm", () => {
       expect(generateContentMock).toHaveBeenCalledTimes(1) // AI 생성으로 폴백하지 않음
     })
 
-    it("검증 모델 호출 자체가 실패(unknown)하면 무관 판정과 동일하게 후보를 건너뛰고 AI 생성으로 폴백한다", async () => {
+    it("검증 모델 호출 자체가 실패(unknown)하면 무관 판정과 동일하게 후보를 건너뛰고 AI 생성으로 폴백한다 (allowAiFallback=true인 경우만)", async () => {
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock.mockResolvedValueOnce(["https://search.example.com/unverified.jpg"])
       verifyImageRelevanceMock.mockResolvedValueOnce("unknown") // 검증 모델 할당량 소진 등
@@ -661,7 +661,7 @@ describe("llm", () => {
           ],
         })
 
-      const result = await generateNaverDraft(mockPost)
+      const result = await generateNaverDraft({ ...mockPost, category: "기타" })
 
       expect(result).not.toContain("unverified.jpg")
       expect(result).toContain(
@@ -670,7 +670,7 @@ describe("llm", () => {
       expect(generateContentMock).toHaveBeenCalledTimes(2) // 텍스트 생성 + AI 이미지 생성 폴백
     })
 
-    it("슬롯당 검증 시도가 3회를 넘으면 AI 생성으로 폴백한다", async () => {
+    it("슬롯당 검증 시도가 3회를 넘으면 AI 생성으로 폴백한다 (allowAiFallback=true인 경우만)", async () => {
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock.mockResolvedValueOnce([
         "https://search.example.com/a.jpg",
@@ -689,7 +689,7 @@ describe("llm", () => {
           ],
         })
 
-      const result = await generateNaverDraft(mockPost)
+      const result = await generateNaverDraft({ ...mockPost, category: "기타" })
 
       // 검증은 최대 3장까지만 시도(a, b, c) — 4번째(d)까지 확인하지 않고 AI 생성으로 폴백
       expect(verifyImageRelevanceMock).toHaveBeenCalledTimes(3)
@@ -710,7 +710,7 @@ describe("llm", () => {
       expect(searchRealImagesMock).toHaveBeenCalledWith("부평 이자카야 잇키 서울", 5)
     })
 
-    it("검색 결과가 부족하면 나머지만 AI 생성으로 채운다", async () => {
+    it("검색 결과가 부족하면 나머지만 AI 생성으로 채운다 (allowAiFallback=true인 경우만)", async () => {
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock
         .mockResolvedValueOnce(["https://search.example.com/real1.jpg"])
@@ -725,7 +725,7 @@ describe("llm", () => {
           ],
         })
 
-      const result = await generateNaverDraft(mockPost)
+      const result = await generateNaverDraft({ ...mockPost, category: "기타" })
 
       expect(result).toBe(
         "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n마무리 인사."
@@ -733,8 +733,9 @@ describe("llm", () => {
       expect(generateContentMock).toHaveBeenCalledTimes(2)
     })
 
-    it("요약 스타일 카테고리(육아 등)는 이미지 검색을 시도하지 않고 바로 AI로 생성한다", async () => {
+    it("정보 카테고리(육아 등)도 검색을 먼저 시도하고, 실패하면 AI로 보완한다 (allowAiFallback=true)", async () => {
       process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock.mockResolvedValueOnce([]) // 검색 결과 없음
       generateContentMock
         .mockResolvedValueOnce({
           text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
@@ -747,8 +748,24 @@ describe("llm", () => {
 
       await generateNaverDraft({ ...mockPost, category: "육아" })
 
-      expect(searchRealImagesMock).not.toHaveBeenCalled()
-      expect(generateContentMock).toHaveBeenCalledTimes(2)
+      expect(searchRealImagesMock).toHaveBeenCalled() // 이제 검색을 시도함
+      expect(generateContentMock).toHaveBeenCalledTimes(2) // 텍스트 생성 + AI 이미지 생성 폴백
+    })
+
+    it("실사 스타일 카테고리(나들이/맛집)는 검색으로 다 못 채워도 AI로 대체하지 않고 그 자리를 비워둔다 (회귀 테스트)", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock.mockResolvedValueOnce([]) // 첫 슬롯 검색 실패
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+      })
+
+      const result = await generateNaverDraft(mockPost) // category="맛집" (allowAiFallback=false)
+
+      // 첫 슬롯은 검색 실패로 비워짐, 두 번째 슬롯만 삽입 시도 (generateContentMock은 텍스트 생성 1회만)
+      expect(generateContentMock).toHaveBeenCalledTimes(1) // AI 이미지 생성 없음
+      expect(searchRealImagesMock).toHaveBeenCalled() // 검색은 시도했음
+      expect(result).toContain("첫 번째 이야기입니다")
+      expect(result).not.toContain("[사진 원본") // 검색 실패한 이미지는 삽입되지 않음
     })
   })
 })

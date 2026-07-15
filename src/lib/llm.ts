@@ -4,7 +4,6 @@ import { GEMINI_RATE_LIMIT } from "@/constants"
 import {
   generateAiImage,
   verifyImageRelevance,
-  type IllustrativeImageStyle,
 } from "./imageGen"
 import { searchRealImages } from "./imageSearch"
 import { searchNaverPlace } from "./naverLocalSearch"
@@ -58,19 +57,23 @@ function shouldTryNextModel(error: unknown): boolean {
 // - 결혼/육아: 혼인신고, 육아휴직 신청 등 절차·정보 안내형 글이 많음 (인용구 소제목 + 번호 목록 구조)
 // - 나들이/맛집: 장소 방문 후기형 글 (상단 정보 인용구 + 사진별 코멘트 구조)
 // - 기타: 일상 공유부터 이벤트/혜택 공유까지 다양하게 섞여 있음
+//
+// 이미지 소싱 우선순위 변경(2026-07-15):
+// - allowAiFallback=false (나들이/맛집): 첨부 → 웹 검색만 (AI 생성 제외)
+// - allowAiFallback=true (결혼/육아/기타): 첨부 → 웹 검색 → AI 생성 보완
 const CATEGORY_STYLE_NOTES: Record<
   string,
   {
     naverCategoryLabel: string
     notes: string
     aiImageCount: number
-    imageStyle: "summary" | "photo"
+    allowAiFallback: boolean
   }
 > = {
   결혼: {
     naverCategoryLabel: "결혼일지(۶•̀ᴗ•́)۶",
     aiImageCount: 1,
-    imageStyle: "summary",
+    allowAiFallback: true,
     notes: `- 혼인신고, 웨딩홀 비교 등 절차/정보 안내형 글이 많은 카테고리입니다.
 - 소제목은 반드시 그 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙여서 표시하세요. \`<blockquote>\`, \`</blockquote>\` 같은 HTML 태그는 절대 쓰지 마세요.
 - 소제목 줄 바로 다음에는 반드시 빈 줄을 넣어서 소제목과 본문 내용이 서로 다른 문단이 되게 하세요(같은 문단에 이어 쓰지 마세요).
@@ -81,7 +84,7 @@ const CATEGORY_STYLE_NOTES: Record<
   육아: {
     naverCategoryLabel: "아가야 안녕(•ө•)♡",
     aiImageCount: 1,
-    imageStyle: "summary",
+    allowAiFallback: true,
     notes: `- 육아휴직/출산휴가 신청 같은 절차·서류 안내형 글이 많은 카테고리입니다.
 - 소제목은 반드시 그 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙여서 표시하세요. \`<blockquote>\`, \`</blockquote>\` 같은 HTML 태그는 절대 쓰지 마세요.
 - 소제목 줄 바로 다음에는 반드시 빈 줄을 넣어서 소제목과 본문 내용이 서로 다른 문단이 되게 하세요(같은 문단에 이어 쓰지 마세요).
@@ -91,7 +94,7 @@ const CATEGORY_STYLE_NOTES: Record<
   나들이: {
     naverCategoryLabel: "나들이일지(˘▾˘)~",
     aiImageCount: 4,
-    imageStyle: "photo",
+    allowAiFallback: false,
     notes: `- 방문한 장소(숙소, 시설, 여행지 등) 후기 글입니다.
 - 글 상단에 주소/전화/영업시간/주차 등 기본 정보를 정리하세요. 각 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙이면 되고, \`<blockquote>\` 같은 HTML 태그는 쓰지 마세요.
 - 이후 사진 위치마다 한두 문장씩 짧고 구어체로 코멘트하세요(예: "~있다", "~함", "~인 듯").
@@ -100,7 +103,7 @@ const CATEGORY_STYLE_NOTES: Record<
   맛집: {
     naverCategoryLabel: "욤뇸뇸일지(˘༥˘ )",
     aiImageCount: 4,
-    imageStyle: "photo",
+    allowAiFallback: false,
     notes: `- 방문한 맛집/카페 후기 글입니다.
 - 글 상단에 주소/전화/영업시간/주차 등 기본 정보를 정리하세요. 각 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙이면 되고, \`<blockquote>\` 같은 HTML 태그는 쓰지 마세요.
 - 이후 사진 위치마다 한두 문장씩 짧고 구어체로 음식/분위기를 코멘트하세요.
@@ -109,7 +112,7 @@ const CATEGORY_STYLE_NOTES: Record<
   기타: {
     naverCategoryLabel: "일상/꿀팁일지(ᐢ ̫ᐢ)",
     aiImageCount: 2,
-    imageStyle: "summary",
+    allowAiFallback: true,
     notes: `- 일상 공유, 정보/꿀팁, 이벤트·혜택 공유 등 다양한 글이 섞여 있는 카테고리입니다.
 - 이벤트/혜택 공유 글이면 "~공유드립니닷", "신청ㄱㄱ!" 같은 캐주얼한 독려 문구와 링크를 자연스럽게 넣어도 됩니다.
 - 정보/팁 글이면 결혼·육아 카테고리처럼 소제목과 번호 목록으로 정리하세요. 소제목은 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙이고, \`<blockquote>\` 같은 HTML 태그는 쓰지 마세요. 소제목 줄 다음에는 반드시 빈 줄을 넣어 본문과 다른 문단으로 분리하세요.`,
@@ -117,7 +120,7 @@ const CATEGORY_STYLE_NOTES: Record<
 }
 
 const DEFAULT_AI_IMAGE_COUNT = 1
-const DEFAULT_IMAGE_STYLE = "photo" as const
+const DEFAULT_ALLOW_AI_FALLBACK = false
 
 function buildCategoryStyleNote(category: string): string {
   const entry = CATEGORY_STYLE_NOTES[category]
@@ -340,27 +343,23 @@ async function pickVerifiedCandidate(
   return { pick: null, attemptsUsed }
 }
 
-// 부족한 이미지 개수를 채운다. 우선순위: (1) 실사 스타일 카테고리(나들이·맛집)는 첨부된
-// 지도 URL의 place ID로 그 장소의 실제 사진(업체 등록/방문자 인증 사진)을 먼저 찾고,
-// (2) 그걸로 못 채우면 슬롯마다 다른 검색어로 네이버 이미지 검색을 하고, (3) 그래도
-// 못 채운 나머지(또는 요약 스타일 카테고리 전체)는 AI로 생성한다. place ID 기반 사진은
-// 첨부 링크가 가리키는 바로 그 장소의 사진이라 검색과 달리 다른 장소 사진이 섞일 일이
-// 없다(실측 확인된 문제 - 이자카야 글에 검색으로 찾은 무관한 피자 사진이 쓰인 사고).
+// 부족한 이미지 개수를 채운다. 모든 카테고리가 동일한 파이프라인을 따른다:
+// (1) 첨부된 지도 URL의 place ID로 그 장소의 실제 사진(업체 등록/방문자 인증 사진) 시도
+// (2) 그걸로 못 채우면 슬롯마다 다른 검색어로 네이버 이미지 검색 시도
+// (3) allowAiFallback=true인 카테고리만, 그래도 못 채운 나머지를 AI로 생성
+// allowAiFallback=false인 카테고리(나들이/맛집)는 (1)+(2)로 채우지 못한 슬롯을 비워둔다.
+// place ID 기반 사진은 첨부 링크가 가리키는 바로 그 장소의 사진이라 검색과 달리
+// 다른 장소 사진이 섞일 일이 없다(실측 확인된 문제 - 이자카야 글에 검색으로 찾은
+// 무관한 피자 사진이 쓰인 사고).
 async function resolveShortfallImages(
   points: number[],
   paragraphs: string[],
   postTitle: string,
   tags: string[],
   apiKey: string,
-  style: IllustrativeImageStyle,
+  allowAiFallback: boolean,
   placeId: string | null
 ): Promise<(string | null)[]> {
-  if (style !== "photo") {
-    return Promise.all(
-      points.map((i) => generateAiImage(apiKey, paragraphs[i].slice(0, 60), style))
-    )
-  }
-
   const cleanTitle = cleanTitleForSearch(postTitle)
   const placePhotos = placeId ? await fetchNaverPlacePhotos(placeId, points.length * 3) : []
 
@@ -371,7 +370,7 @@ async function resolveShortfallImages(
   // 사진이 섞여 나오고, 타인의 개인 사진이나 대여점 광고 이미지가 그대로 쓰이는 사고가
   // 실측으로 확인되어, 검증 없이는(모델 호출 자체가 실패해 답을 못 받은 "unknown" 포함)
   // 신뢰할 수 없다고 판단해 후보를 사용하지 않는다. 비용을 고려해 슬롯당 검증 시도는
-  // 최대 3장(place+검색 합산)으로 제한하고, 통과하는 후보가 없으면 AI 생성으로 폴백한다.
+  // 최대 3장(place+검색 합산)으로 제한하고, allowAiFallback=true인 경우만 AI 생성으로 폴백한다.
   const MAX_VERIFY_ATTEMPTS_PER_SLOT = 3
   const usedUrls = new Set<string>()
   const results: (string | null)[] = []
@@ -404,6 +403,9 @@ async function resolveShortfallImages(
     results.push(pick)
   }
 
+  // allowAiFallback=false인 경우(나들이/맛집)는 여기서 반환. AI 생성은 하지 않음.
+  if (!allowAiFallback) return results
+
   const missingIndexes = results
     .map((v, i) => (v === null ? i : -1))
     .filter((i) => i >= 0)
@@ -411,7 +413,7 @@ async function resolveShortfallImages(
   if (missingIndexes.length > 0) {
     const generated = await Promise.all(
       missingIndexes.map((i) =>
-        generateAiImage(apiKey, paragraphs[points[i]].slice(0, 60), style)
+        generateAiImage(apiKey, paragraphs[points[i]].slice(0, 60), "summary")
       )
     )
     missingIndexes.forEach((i, k) => {
@@ -425,13 +427,14 @@ async function resolveShortfallImages(
 // 사용자 첨부 사진과 부족분(실사 검색/AI 생성)을 모두 서술형 문단 사이사이에 프로그래밍적으로
 // 끼워넣는다. 첨부 사진의 URL은 LLM에게 애초에 주지 않으므로(위 formatImageAttachmentHints
 // 참고) 여기서 코드가 직접 삽입해야 실제로 첨부한 사진이 결과에 반드시 포함된다.
-// 정보/절차성 카테고리(결혼·육아·기타)는 AI 요약형 이미지, 방문 후기성 카테고리(나들이·맛집)는
-// 실사 검색 우선 + AI 생성 보완(CATEGORY_STYLE_NOTES 기준)으로 부족분을 채운다.
+// 모든 카테고리가 동일하게 (첨부 → 웹 검색) 파이프라인을 따르고,
+// allowAiFallback=true인 카테고리(결혼·육아·기타)만 AI 이미지로 보완한다.
+// allowAiFallback=false인 카테고리(나들이·맛집)는 부족한 슬롯을 비워둔다.
 async function insertImages(text: string, apiKey: string, post: Post): Promise<string> {
   const attachments = (post.contentAttachments ?? []).filter((a) => a.kind === "image")
   const entry = post.category ? CATEGORY_STYLE_NOTES[post.category] : undefined
   const targetCount = entry?.aiImageCount ?? DEFAULT_AI_IMAGE_COUNT
-  const style = entry?.imageStyle ?? DEFAULT_IMAGE_STYLE
+  const allowAiFallback = entry?.allowAiFallback ?? DEFAULT_ALLOW_AI_FALLBACK
   const shortfall = Math.max(targetCount - attachments.length, 0)
   const totalSlots = attachments.length + shortfall
   if (totalSlots === 0) return text
@@ -455,7 +458,7 @@ async function insertImages(text: string, apiKey: string, post: Post): Promise<s
           post.title,
           post.tags,
           apiKey,
-          style,
+          allowAiFallback,
           placeId
         )
       : []
