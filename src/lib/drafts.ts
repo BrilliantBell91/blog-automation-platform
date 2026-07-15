@@ -85,3 +85,26 @@ export async function getDraftItemByPostId(postId: string): Promise<DraftListIte
   if (!row) return null
   return mapRowToDraftListItem(row)
 }
+
+/**
+ * Notion 페이지 ID 기준으로 생성된 초안을 조회한다 (공개 포스트 상세 페이지용).
+ * 공개 사이트의 Post.id는 Notion 페이지 ID(notionId)를 쓰는 반면, 로컬 Post 테이블은
+ * 별도의 DB id(cuid)를 쓰므로 getDraftItemByPostId(로컬 id 기준)와는 조회 기준이 다르다.
+ * 초안이 아직 생성되지 않았거나(로컬 Post 행 자체가 없거나 Draft가 없음) 조회 실패 시 null.
+ */
+export async function getDraftByNotionId(notionId: string): Promise<Draft | null> {
+  const row = await db.post.findUnique({
+    where: { notionId },
+    include: { draft: true },
+  })
+  if (!row?.draft) return null
+  return {
+    id: row.draft.id,
+    postId: row.draft.postId,
+    generatedContent: row.draft.generatedContent,
+    status: row.draft.status as DraftStatus,
+    reviewedById: row.draft.reviewedById,
+    createdAt: row.draft.createdAt,
+    updatedAt: row.draft.updatedAt,
+  }
+}

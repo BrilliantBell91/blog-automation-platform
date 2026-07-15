@@ -2,11 +2,13 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { getCachedPostById, getCachedPublishedPosts } from "@/lib/postsCache"
+import { getDraftByNotionId } from "@/lib/drafts"
 import { generateMockPosts } from "@/lib/mockData"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { OptimizedImage } from "@/components/OptimizedImage"
 import { PostBody } from "@/components/PostBody"
+import { NaverDraftView } from "@/components/NaverDraftView"
 import { ShareButtons } from "@/components/ShareButtons"
 import { formatDate } from "@/lib/formatters"
 import { STATIC_PARAMS_POST_LIMIT } from "@/constants"
@@ -30,6 +32,7 @@ export default async function PostPage({ params }: PostPageProps) {
 
   let post = await getCachedPostById(id).catch(() => null)
   let allPosts
+  let draft = null
 
   if (!post) {
     const mockPosts = generateMockPosts(MOCK_POOL_SIZE)
@@ -37,6 +40,12 @@ export default async function PostPage({ params }: PostPageProps) {
     allPosts = mockPosts
   } else {
     allPosts = await getCachedPublishedPosts()
+    // 관리자 대시보드에서 생성한 네이버 스타일 초안이 있으면 그걸 "완성된 글"로 우선
+    // 보여준다. Notion 원본은 정리 전 메모에 가까운 경우가 많아(예: "지원 대상: ...
+    // 소득 무관 전 국민" 같은 팩트 나열), 초안이 있는데도 원본을 보여주면 사용자가
+    // "요약본만 보인다"고 느끼는 문제가 실측으로 확인됐다. 초안이 없으면(아직 생성
+    // 전) 기존처럼 Notion 원본을 보여준다.
+    draft = await getDraftByNotionId(id).catch(() => null)
   }
 
   if (!post || post.status !== "발행됨") {
@@ -95,12 +104,16 @@ export default async function PostPage({ params }: PostPageProps) {
 
         <Separator />
 
-        <PostBody
-          blocks={post.blocks}
-          fallbackContent={post.content}
-          pageId={post.notionId}
-          attachments={post.contentAttachments}
-        />
+        {draft ? (
+          <NaverDraftView content={draft.generatedContent} />
+        ) : (
+          <PostBody
+            blocks={post.blocks}
+            fallbackContent={post.content}
+            pageId={post.notionId}
+            attachments={post.contentAttachments}
+          />
+        )}
       </article>
 
       <div className="flex items-center justify-between">
