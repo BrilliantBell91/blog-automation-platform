@@ -113,13 +113,13 @@ describe("searchRealImages", () => {
 describe("searchGoogleImages", () => {
   beforeEach(() => {
     process.env.GOOGLE_SEARCH_API_KEY = "test-key"
-    process.env.GOOGLE_SEARCH_ENGINE_ID = "test-cx"
+    process.env.GOOGLE_SEARCH_CX = "test-cx"
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
     delete process.env.GOOGLE_SEARCH_API_KEY
-    delete process.env.GOOGLE_SEARCH_ENGINE_ID
+    delete process.env.GOOGLE_SEARCH_CX
   })
 
   it("API 키나 검색엔진 ID가 없으면 빈 배열을 반환한다", async () => {

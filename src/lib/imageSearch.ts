@@ -122,7 +122,8 @@ const GOOGLE_CUSTOM_SEARCH_URL = "https://www.googleapis.com/customsearch/v1"
 // 보완에 더 적합하다. 키가 없으면 조용히 건너뛴다(searchRealImages와 동일한 패턴).
 export async function searchGoogleImages(query: string, count: number): Promise<string[]> {
   const apiKey = process.env.GOOGLE_SEARCH_API_KEY
-  const engineId = process.env.GOOGLE_SEARCH_ENGINE_ID
+  // Google Custom Search API의 실제 파라미터명이 "cx"라 환경변수명도 이를 따른다.
+  const engineId = process.env.GOOGLE_SEARCH_CX
   if (!apiKey || !engineId || count <= 0) return []
 
   try {
