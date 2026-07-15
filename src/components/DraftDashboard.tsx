@@ -54,7 +54,7 @@ function getDraftStatusBadgeVariant(
 
 export function DraftDashboard({ initialItems }: DraftDashboardProps) {
   const router = useRouter()
-  const [items, setItems] = useState(initialItems)
+  const items = initialItems
   const [activeFilter, setActiveFilter] = useState<FilterType>("all")
   const [previewItem, setPreviewItem] = useState<{
     post: Post
