@@ -17,13 +17,9 @@ interface PostPageProps {
 
 const MOCK_POOL_SIZE = 24
 
-// Task 012: ISR 설정 (포스트 상세 페이지는 searchParams를 쓰지 않아 Full Route Cache가 정상 적용됨)
 export const revalidate = 600 // 10분
-
-// Task 012: on-demand ISR 대상 외 경로는 동적 렌더링 (기본값이지만 의도를 명시)
 export const dynamicParams = true
 
-// Task 012: 최신 발행 N개 포스트는 빌드 시 정적 생성
 export async function generateStaticParams() {
   const posts = await getCachedPublishedPosts()
   return posts.slice(0, STATIC_PARAMS_POST_LIMIT).map((post) => ({ id: post.notionId }))
@@ -32,17 +28,14 @@ export async function generateStaticParams() {
 export default async function PostPage({ params }: PostPageProps) {
   const { id } = await params
 
-  // Task 012: getPostById → getCachedPostById로 교체 (캐시 계층 추가)
   let post = await getCachedPostById(id).catch(() => null)
   let allPosts
 
   if (!post) {
-    // Notion 포스트가 없으면 mock으로 폴백 (로컬 테스트용)
     const mockPosts = generateMockPosts(MOCK_POOL_SIZE)
     post = mockPosts.find((p) => p.id === id) || null
     allPosts = mockPosts
   } else {
-    // Notion 포스트 찾음
     allPosts = await getCachedPublishedPosts()
   }
 
@@ -50,21 +43,18 @@ export default async function PostPage({ params }: PostPageProps) {
     notFound()
   }
 
-  // 이전/다음 포스트 계산 (발행된 모든 포스트 기준)
   const currentIndex = allPosts.findIndex((p) => p.notionId === id || p.id === id)
 
   let previousPost
   let nextPost
 
   if (currentIndex > 0) {
-    nextPost = allPosts[currentIndex - 1] // 최신이 먼저이므로 index - 1이 다음
+    nextPost = allPosts[currentIndex - 1]
   }
   if (currentIndex < allPosts.length - 1) {
-    previousPost = allPosts[currentIndex + 1] // 이전
+    previousPost = allPosts[currentIndex + 1]
   }
 
-  // 발행일과 실제로 다른 경우에만 "수정일"을 노출한다 (더미 데이터는 대부분 동일한 시각을 가짐)
-  // 작성자 이름 필드는 Post 타입에 존재하지 않아(authorId만 있음) 표시하지 않음
   const publishedDate = post.publishedAt ?? post.createdAt
   const showUpdatedAt =
     post.updatedAt && new Date(post.updatedAt).getTime() !== new Date(publishedDate).getTime()
@@ -85,7 +75,6 @@ export default async function PostPage({ params }: PostPageProps) {
         </div>
       )}
 
-      {/* 포스트 본문을 article로 감싸 시맨틱을 명확히 함(제목/메타/본문만 포함, 공유·이전다음 글은 본문 외부) */}
       <article className="space-y-6">
         <header className="space-y-3">
           <h1 className="text-3xl font-bold leading-tight md:text-4xl">{post.title}</h1>
@@ -105,7 +94,6 @@ export default async function PostPage({ params }: PostPageProps) {
 
         <Separator />
 
-        {/* @tailwindcss/typography 플러그인(postcss.config.mjs 등록됨)을 활용한 본문 스타일링, 다크 모드 대비 포함 */}
         <PostBody blocks={post.blocks} fallbackContent={post.content} pageId={post.notionId} />
       </article>
 
@@ -125,7 +113,6 @@ export default async function PostPage({ params }: PostPageProps) {
             <span className="line-clamp-2">{previousPost.title}</span>
           </Link>
         ) : (
-          // 모바일 1열에서는 빈 자리가 불필요한 여백을 만들므로 sm 이상에서만 자리 차지
           <span aria-hidden="true" className="hidden sm:block" />
         )}
         {nextPost ? (

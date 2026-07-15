@@ -1,6 +1,8 @@
+'use client'
+
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import {
   SheetContent,
   SheetHeader,
@@ -9,19 +11,25 @@ import {
 
 // 데스크톱 사이드바와 모바일 Sheet가 동일한 메뉴 항목을 공유하기 위한 내부 컴포넌트
 function AdminNavLinks() {
+  const pathname = usePathname()
+
   return (
     <nav aria-label="관리자 메뉴" className="space-y-2">
-      <Button variant="ghost" asChild className="h-11 w-full justify-start">
+      <Button
+        variant="ghost"
+        asChild
+        className="h-11 w-full justify-start"
+        aria-current={pathname === '/' ? 'page' : undefined}
+      >
+        <Link href="/">메인</Link>
+      </Button>
+      <Button
+        variant="ghost"
+        asChild
+        className="h-11 w-full justify-start"
+        aria-current={pathname.startsWith('/admin/drafts') ? 'page' : undefined}
+      >
         <Link href="/admin/drafts">초안 대시보드</Link>
-      </Button>
-      {/* 설정 페이지는 ROADMAP.md에 아직 없는 범위 밖 항목 — 죽은 링크 대신 비활성 표시로 PRD 요구사항만 시각적으로 반영 */}
-      <Button variant="ghost" disabled className="h-11 w-full justify-start gap-2">
-        설정
-        <Badge variant="secondary">준비 중</Badge>
-      </Button>
-      {/* 로그아웃 실동작은 Task 008에서 구현 예정 */}
-      <Button variant="ghost" disabled className="h-11 w-full justify-start" title="Task 008에서 구현 예정">
-        로그아웃
       </Button>
     </nav>
   )

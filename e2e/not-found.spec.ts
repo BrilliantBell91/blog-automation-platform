@@ -1,7 +1,22 @@
 import { test, expect } from "@playwright/test"
 
-test.describe("404 에러 페이지", () => {
+// 로그인 헬퍼 함수
+async function login(page: any) {
+  await page.goto("/login")
+  const adminEmail = process.env.ADMIN_EMAIL || "admin@example.com"
+  const adminPassword = process.env.ADMIN_PASSWORD || "password"
+
+  await page.locator("input[type='email']").fill(adminEmail)
+  await page.locator("input[type='password']").fill(adminPassword)
+  await page.locator("button").filter({ hasText: /로그인/ }).click()
+  await page.waitForLoadState("networkidle")
+}
+
+test.describe("404 에러 페이지 (로그인 필요)", () => {
   test("존재하지 않는 포스트 페이지 방문", async ({ page }) => {
+    // 로그인 수행
+    await login(page)
+
     await page.goto("/posts/no-such-id")
     await page.waitForLoadState("networkidle")
 
@@ -15,6 +30,9 @@ test.describe("404 에러 페이지", () => {
   })
 
   test("존재하지 않는 일반 경로 방문", async ({ page }) => {
+    // 로그인 수행
+    await login(page)
+
     await page.goto("/nonexistent-page")
     await page.waitForLoadState("networkidle")
 

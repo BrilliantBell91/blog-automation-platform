@@ -1,11 +1,12 @@
 "use client"
 
 import Link from "next/link"
-import { Menu, RefreshCw } from "lucide-react"
+import { Menu, RefreshCw, LogOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { SheetTrigger } from "@/components/ui/sheet"
 import { toast } from "sonner"
 import { useState } from "react"
+import { signOut } from "next-auth/react"
 
 interface AdminHeaderProps {
   userName?: string
@@ -13,6 +14,7 @@ interface AdminHeaderProps {
 
 export function AdminHeader({ userName }: AdminHeaderProps) {
   const [isRevalidating, setIsRevalidating] = useState(false)
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
 
   // Task 012: 홈페이지 캐시 재검증 버튼
   const handleRevalidateHome = async () => {
@@ -36,6 +38,17 @@ export function AdminHeader({ userName }: AdminHeaderProps) {
       toast.error("요청 중 오류가 발생했습니다.")
     } finally {
       setIsRevalidating(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true)
+    try {
+      await signOut({ redirectTo: "/login" })
+    } catch (error) {
+      console.error("로그아웃 실패:", error)
+      toast.error("로그아웃 중 오류가 발생했습니다.")
+      setIsLoggingOut(false)
     }
   }
 
@@ -77,9 +90,15 @@ export function AdminHeader({ userName }: AdminHeaderProps) {
           {isRevalidating ? "재검증 중..." : "캐시 새로고침"}
         </Button>
         <span className="hidden text-sm sm:inline">{userName || "게스트"}</span>
-        {/* 로그아웃 실동작은 Task 008(NextAuth signOut 연동)에서 구현 예정 */}
-        <Button variant="outline" size="sm" className="h-11" disabled title="Task 008에서 구현 예정">
-          로그아웃
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-11"
+          onClick={handleLogout}
+          disabled={isLoggingOut}
+        >
+          <LogOut className="mr-2 h-4 w-4" aria-hidden="true" />
+          {isLoggingOut ? "로그아웃 중..." : "로그아웃"}
         </Button>
       </div>
     </header>

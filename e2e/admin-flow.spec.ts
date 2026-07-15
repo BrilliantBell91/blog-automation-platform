@@ -24,9 +24,9 @@ test.describe("관리자 대시보드 플로우", () => {
     // 대시보드 로드 대기
     await page.waitForLoadState("networkidle")
 
-    // 로그인 성공 확인 (초안 관리 페이지로 리다이렉트)
-    await expect(page).toHaveURL("/admin/drafts")
-    await expect(page.locator("h1, h2").filter({ hasText: /초안|관리|대시보드/ })).toBeTruthy()
+    // 로그인 성공 확인 (메인 페이지로 리다이렉트)
+    await expect(page).toHaveURL("/")
+    await expect(page.locator("h1").filter({ hasText: /최신 글/ })).toBeTruthy()
   })
 
   test("미인증 사용자는 관리자 페이지 접근 불가", async ({ page }) => {

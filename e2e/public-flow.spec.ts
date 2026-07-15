@@ -1,9 +1,24 @@
 import { test, expect } from "@playwright/test"
 
-test.describe("공개 블로그 플로우", () => {
-  test("홈 → 포스트 상세 → 카테고리 필터 → 검색", async ({ page }) => {
-    // 홈페이지 방문
-    await page.goto("/")
+// 로그인 헬퍼 함수
+async function login(page: any) {
+  await page.goto("/login")
+  const adminEmail = process.env.ADMIN_EMAIL || "admin@example.com"
+  const adminPassword = process.env.ADMIN_PASSWORD || "password"
+
+  await page.locator("input[type='email']").fill(adminEmail)
+  await page.locator("input[type='password']").fill(adminPassword)
+  await page.locator("button").filter({ hasText: /로그인/ }).click()
+  await page.waitForLoadState("networkidle")
+}
+
+test.describe("블로그 플로우 (로그인 필요)", () => {
+  test("로그인 → 홈 → 포스트 상세 → 카테고리 필터 → 검색", async ({ page }) => {
+    // 로그인 수행
+    await login(page)
+
+    // 메인 페이지 확인 (로그인 후 랜딩)
+    await expect(page).toHaveURL("/")
     await expect(page).toHaveTitle(/Notion CMS/)
 
     // 포스트 카드 표시 확인
@@ -52,8 +67,9 @@ test.describe("공개 블로그 플로우", () => {
     }
   })
 
-  test("홈 페이지 네비게이션", async ({ page }) => {
-    await page.goto("/")
+  test("홈 페이지 네비게이션 (로그인 필요)", async ({ page }) => {
+    // 로그인 수행
+    await login(page)
 
     // 헤더/네비게이션 확인
     const navbar = page.locator("nav, header")

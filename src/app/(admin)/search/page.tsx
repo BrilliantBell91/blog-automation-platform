@@ -11,7 +11,6 @@ interface SearchPageProps {
   searchParams: Promise<{ q?: string; type?: string; page?: string }>
 }
 
-// Task 012: 검색 페이지는 동적 렌더링 유지 (ROADMAP 요구사항)
 export const dynamic = "force-dynamic"
 
 const TYPE_LABELS: Record<SearchType, string> = {
@@ -29,8 +28,6 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const currentPage = Math.max(1, Number(page) || 1)
   const query = q.trim()
 
-  // Task 012: mock 데이터 제거, 실데이터 연동
-  // searchPosts는 Notion이 본문검색을 지원하지 않아 전체조회 후 애플리케이션 레벨 필터링 수행
   const allMatches = query ? await searchPosts(query, searchType) : []
 
   const totalPages = Math.max(1, Math.ceil(allMatches.length / POSTS_PER_PAGE))
@@ -47,8 +44,6 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
 
       <SearchBar defaultValue={query} />
 
-      {/* 검색 결과 타입 필터 — 페이지 이동을 수행하는 링크 그룹이므로 nav로 마크업(CategoryFilter와 동일 패턴) */}
-      {/* flex-wrap이 375px 폭에서도 버튼 4개를 자동 줄바꿈하므로 overflow-x-auto는 불필요 */}
       <nav aria-label="검색 결과 타입 필터" className="flex flex-wrap gap-2">
         {Object.values(SEARCH_TYPES).map((t) => (
           <Link
