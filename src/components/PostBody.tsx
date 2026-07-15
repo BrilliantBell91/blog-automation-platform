@@ -1,10 +1,15 @@
-import { NotionBlock } from "@/types"
+import { NotionBlock, LlmAttachment } from "@/types"
 import { OptimizedImage } from "@/components/OptimizedImage"
 
 interface PostBodyProps {
   blocks?: NotionBlock[]
   fallbackContent: string
   pageId: string
+  // 본문 블록도 텍스트도 전혀 없는 글(사진/링크를 Notion "Image"/"URL" 속성에만 첨부하고
+  // 본문은 안 쓰는 경우가 실측으로 확인됨)을 위한 최후 폴백. LLM 마커 텍스트는 절대
+  // 포함하지 않고 순수 이미지/링크만 렌더링하므로 기존 "공개 사이트에 노출 안 함" 설계
+  // 의도(마커 텍스트 노출 금지)를 위반하지 않는다.
+  attachments?: LlmAttachment[]
 }
 
 interface ListRun {
@@ -44,8 +49,55 @@ function groupListItems(blocks: NotionBlock[]): (NotionBlock | ListRun)[] {
   return result
 }
 
-export function PostBody({ blocks, fallbackContent, pageId }: PostBodyProps) {
-  // blocks가 없으면 폴백 (구버전 캐시, mock 데이터 미정의 등)
+function AttachmentGallery({ attachments, pageId }: { attachments: LlmAttachment[]; pageId: string }) {
+  const images = attachments.filter((a) => a.kind === "image")
+  const links = attachments.filter((a) => a.kind === "link")
+
+  return (
+    <div className="prose prose-sm max-w-none dark:prose-invert sm:prose-base">
+      {images.map((image, i) => (
+        <div
+          key={image.url}
+          className="relative my-4 aspect-[4/3] overflow-hidden rounded-lg bg-muted"
+        >
+          <OptimizedImage
+            src={image.url}
+            alt={image.label || "첨부 이미지"}
+            variant="body"
+            pageId={pageId}
+            // Notion "Image" 속성 첨부 재조회는 현재 첫 번째 파일 URL만 돌려주므로,
+            // 두 번째 이미지부터는(i > 0) 만료 후 재조회가 정확하지 않을 수 있다(알려진 한계).
+            refreshKind={i === 0 ? "property" : undefined}
+            className="object-contain"
+          />
+        </div>
+      ))}
+      {links.map((link) => (
+        <a
+          key={link.url}
+          href={link.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block my-4 p-4 border rounded-lg bg-muted hover:bg-muted/80 transition-colors"
+        >
+          <div className="text-sm font-medium text-muted-foreground mb-1">참고 링크</div>
+          <div className="text-base font-semibold text-foreground break-words">
+            {link.label || link.url}
+          </div>
+        </a>
+      ))}
+    </div>
+  )
+}
+
+export function PostBody({ blocks, fallbackContent, pageId, attachments }: PostBodyProps) {
+  // blocks도 fallbackContent(본문 텍스트)도 전혀 없으면, 사진/링크를 Notion 속성에만
+  // 첨부한 글이라는 뜻이니 첨부 갤러리로 대체한다.
+  if ((!blocks || blocks.length === 0) && !fallbackContent && attachments?.length) {
+    return <AttachmentGallery attachments={attachments} pageId={pageId} />
+  }
+
+  // blocks가 없으면 텍스트 폴백 (구버전 캐시, mock 데이터 미정의 등)
   if (!blocks || blocks.length === 0) {
     return (
       <div className="prose prose-sm max-w-none dark:prose-invert sm:prose-base">

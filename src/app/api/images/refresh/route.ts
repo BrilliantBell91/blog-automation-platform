@@ -5,6 +5,9 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const blockId = searchParams.get("blockId")
   const pageId = searchParams.get("pageId")
+  // "property": 본문에 이미지가 없어 Notion "Image" 속성 첫 파일로 폴백한 썸네일
+  // (블록 ID가 없어 pageId 기준으로 속성을 다시 조회해야 함)
+  const kind = searchParams.get("kind")
 
   if (!blockId && !pageId) {
     return NextResponse.json(
@@ -16,7 +19,9 @@ export async function GET(request: NextRequest) {
   try {
     const url = blockId
       ? await getCachedRefreshedImageUrl("block", blockId)
-      : await getCachedRefreshedImageUrl("cover", pageId!)
+      : kind === "property"
+        ? await getCachedRefreshedImageUrl("property", pageId!)
+        : await getCachedRefreshedImageUrl("cover", pageId!)
 
     if (!url) {
       return NextResponse.json(

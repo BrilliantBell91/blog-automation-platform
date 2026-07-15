@@ -70,6 +70,7 @@ export default async function PostPage({ params }: PostPageProps) {
             preload
             blockId={post.thumbnailBlockId}
             pageId={post.notionId}
+            refreshKind={post.thumbnailSource}
             className="object-cover"
           />
         </div>
@@ -94,7 +95,12 @@ export default async function PostPage({ params }: PostPageProps) {
 
         <Separator />
 
-        <PostBody blocks={post.blocks} fallbackContent={post.content} pageId={post.notionId} />
+        <PostBody
+          blocks={post.blocks}
+          fallbackContent={post.content}
+          pageId={post.notionId}
+          attachments={post.contentAttachments}
+        />
       </article>
 
       <div className="flex items-center justify-between">

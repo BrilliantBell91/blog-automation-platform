@@ -244,6 +244,18 @@ function firstImageBlock(blocks: NotionBlock[]): NotionBlock | undefined {
 async function mapPageToPost(page: PageObjectResponse): Promise<Post> {
   const blocks = await getPageBlocks(page.id)
   const thumbnailBlock = firstImageBlock(blocks)
+  const contentAttachments = [
+    ...blocksToAttachments(blocks),
+    ...getImagePropertyAttachments(page, "Image"),
+    ...getUrlPropertyAttachments(page, "URL"),
+  ]
+
+  // 본문에 이미지 블록이 없는 글(사진을 Notion "Image" 속성에만 첨부하고 본문은 안 쓰는
+  // 경우가 실측으로 확인됨 - 예: 본문 블록 0개에 Image 속성 사진 2장인 글)은 카드 썸네일이
+  // 아예 안 뜨는 문제가 있어, 첨부 이미지로 폴백한다.
+  const propertyImageFallback = thumbnailBlock
+    ? undefined
+    : contentAttachments.find((a) => a.kind === "image")
 
   return {
     id: page.id,
@@ -253,19 +265,16 @@ async function mapPageToPost(page: PageObjectResponse): Promise<Post> {
     excerpt: blocksToExcerpt(blocks),
     category: getSelect(page, "Category"),
     tags: getTags(page, "Tags"),
-    imageUrl: thumbnailBlock?.imageUrl,
+    imageUrl: thumbnailBlock?.imageUrl ?? propertyImageFallback?.url,
     status: (getSelect(page, "Status") || "초안") as Post["status"],
     publishedAt: getDate(page, "Published"),
     naverDraftStatus: (getSelect(page, "NaverDraftStatus") || "미생성") as Post["naverDraftStatus"],
     naverPostUrl: getUrl(page, "NaverPostUrl"),
     blocks,
     thumbnailBlockId: thumbnailBlock?.id,
+    thumbnailSource: thumbnailBlock ? "block" : propertyImageFallback ? "property" : undefined,
     keywords: getKeywords(page, "Content"),
-    contentAttachments: [
-      ...blocksToAttachments(blocks),
-      ...getImagePropertyAttachments(page, "Image"),
-      ...getUrlPropertyAttachments(page, "URL"),
-    ],
+    contentAttachments,
     createdAt: new Date(page.created_time),
     updatedAt: new Date(page.last_edited_time),
   }
@@ -377,4 +386,17 @@ export async function refreshCoverImageUrl(pageId: string): Promise<string | und
     throw new Error("페이지 정보를 가져올 수 없습니다")
   }
   return getCoverImageUrl(page)
+}
+
+/**
+ * 만료된 썸네일 이미지 URL 재조회 (Notion "Image" 속성 기반)
+ * 본문에 이미지 블록이 없어 "Image" 속성 사진으로 폴백한 썸네일(Post.thumbnailSource
+ * === "property")은 블록 ID가 없어 refreshImageUrl()로 재조회할 수 없으므로 별도 경로가 필요하다.
+ */
+export async function refreshImagePropertyUrl(pageId: string): Promise<string | undefined> {
+  const page = await withRetry(() => notion.pages.retrieve({ page_id: pageId }))
+  if (!isFullPage(page)) {
+    throw new Error("페이지 정보를 가져올 수 없습니다")
+  }
+  return getImagePropertyAttachments(page, "Image")[0]?.url
 }

@@ -11,6 +11,9 @@ interface OptimizedImageProps {
   variant: OptimizedImageVariant
   blockId?: string
   pageId?: string
+  // 만료 시 재조회 방식을 명시. 미지정 시 blockId 유무로 "block"/"cover"를 추론(기존 동작 유지).
+  // "property": 본문에 이미지가 없어 Notion "Image" 속성으로 폴백한 썸네일(pageId 필요).
+  refreshKind?: "block" | "cover" | "property"
   preload?: boolean
   className?: string
 }
@@ -36,6 +39,7 @@ export function OptimizedImage({
   variant,
   blockId,
   pageId,
+  refreshKind,
   preload = false,
   className,
 }: OptimizedImageProps) {
@@ -46,21 +50,18 @@ export function OptimizedImage({
   const { sizes, quality } = PRESET[variant]
 
   const handleError = async () => {
-    if (hasRetried || !blockId) {
+    const id = blockId ?? pageId
+    if (hasRetried || !id) {
       setFailed(true)
       return
     }
 
     try {
-      const id = blockId ?? pageId
-      const kind = blockId ? "block" : "cover"
+      // refreshKind가 명시되면 그대로 따르고, 없으면 기존처럼 blockId 유무로 추론한다.
+      const kind = refreshKind ?? (blockId ? "block" : "cover")
+      const idParam = kind === "block" ? `blockId=${id}` : `pageId=${id}&kind=${kind}`
 
-      if (!id) {
-        setFailed(true)
-        return
-      }
-
-      const res = await fetch(`/api/images/refresh?${kind}Id=${id}`)
+      const res = await fetch(`/api/images/refresh?${idParam}`)
       if (!res.ok) {
         setFailed(true)
         return

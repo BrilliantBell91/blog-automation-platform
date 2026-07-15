@@ -27,6 +27,7 @@ export function PostCard({ post }: PostCardProps) {
             variant="thumbnail"
             blockId={post.thumbnailBlockId}
             pageId={post.notionId}
+            refreshKind={post.thumbnailSource}
             className="object-cover transition-transform group-hover:scale-105"
           />
         ) : (
@@ -43,7 +44,10 @@ export function PostCard({ post }: PostCardProps) {
       <div className="space-y-2 p-4">
         <h3 className="line-clamp-2 font-semibold">{post.title}</h3>
         <p className="line-clamp-2 text-sm text-muted-foreground">
-          {truncateExcerpt(post.excerpt ?? post.content, 80)}
+          {truncateExcerpt(
+            post.excerpt || post.content || post.keywords?.join(" ") || "",
+            80
+          )}
         </p>
         <div className="flex h-6 items-center gap-1.5 overflow-hidden pt-1">
           {visibleTags.map((tag) => (

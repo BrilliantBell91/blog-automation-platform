@@ -44,8 +44,8 @@ const CATEGORY_STYLE_NOTES: Record<
 > = {
   결혼: {
     naverCategoryLabel: "결혼일지(۶•̀ᴗ•́)۶",
-    aiImageCount: 1,
-    imagesPerParagraphs: 5,
+    aiImageCount: 2,
+    imagesPerParagraphs: 3,
     allowAiFallback: true,
     notes: `- 혼인신고, 웨딩홀 비교 등 절차/정보 안내형 글이 많은 카테고리입니다.
 - 소제목은 반드시 그 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙여서 표시하세요. \`<blockquote>\`, \`</blockquote>\` 같은 HTML 태그는 절대 쓰지 마세요.
@@ -56,8 +56,8 @@ const CATEGORY_STYLE_NOTES: Record<
   },
   육아: {
     naverCategoryLabel: "아가야 안녕(•ө•)♡",
-    aiImageCount: 1,
-    imagesPerParagraphs: 5,
+    aiImageCount: 2,
+    imagesPerParagraphs: 3,
     allowAiFallback: true,
     notes: `- 육아휴직/출산휴가 신청 같은 절차·서류 안내형 글이 많은 카테고리입니다.
 - 소제목은 반드시 그 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙여서 표시하세요. \`<blockquote>\`, \`</blockquote>\` 같은 HTML 태그는 절대 쓰지 마세요.
@@ -88,7 +88,7 @@ const CATEGORY_STYLE_NOTES: Record<
   기타: {
     naverCategoryLabel: "일상/꿀팁일지(ᐢ ̫ᐢ)",
     aiImageCount: 2,
-    imagesPerParagraphs: 5,
+    imagesPerParagraphs: 3,
     allowAiFallback: true,
     notes: `- 일상 공유, 정보/꿀팁, 이벤트·혜택 공유 등 다양한 글이 섞여 있는 카테고리입니다.
 - 이벤트/혜택 공유 글이면 "~공유드립니닷", "신청ㄱㄱ!" 같은 캐주얼한 독려 문구와 링크를 자연스럽게 넣어도 됩니다.
@@ -258,8 +258,16 @@ const MARKER_PARAGRAPH = /^\[(사진 원본|참고링크)/
 
 // 이미지 슬롯의 "장면 설명"으로 쓰기엔 너무 짧은 문단(예: "그럼 다들 기분 좋은 하루
 // 보내세요.🙌" 같은 마무리 인사)은 실질적인 장면 정보가 없어, AI 생성 이미지가 본문과
-// 전혀 무관한 결과(인물 클로즈업 등)로 나오는 사고가 실측으로 확인됐다.
-const MIN_VISUAL_PARAGRAPH_LENGTH = 40
+// 전혀 무관한 결과(인물 클로즈업 등)로 나오는 사고가 실측으로 확인됐다. 다만 이 기준은
+// 원래 40자였으나, 이 블로그의 실제 문체(어투 지침: "문장은 짧게 끊어 쓰고", 예시 "일단
+// 넓다.", "훈제란이 좀 아쉽다." 등 10~20자대)와 정보성 글의 팩트 나열식 구조(예: "지원
+// 기한: 출생일로부터 1년 이내")가 40자 기준에 걸려 후보 문단이 0개가 되고, 결과적으로
+// 이미지 슬롯 자체가 안 생기는 문제가 실측으로 확인되어 15로 낮췄다. AI 생성은 이제
+// allowAiFallback=true 카테고리(결혼/육아/기타)에서 "summary"(카드뉴스) 스타일로만
+// 쓰이므로(실사 장면 묘사가 굳이 길 필요 없음) 원래 우려한 "짧은 문단→AI가 엉뚱한 실사
+// 이미지 생성" 시나리오는 더 이상 발생하지 않는다. 실사가 중요한 나들이/맛집은
+// allowAiFallback=false라 애초에 AI 생성을 쓰지 않는다(검색/장소사진만 사용).
+const MIN_VISUAL_PARAGRAPH_LENGTH = 15
 
 // 이미지 슬롯으로 쓸 수 있는 문단을 필터링한다. 인사말(첫 문단)/마무리·해시태그(마지막 문단),
 // 인용구·해시태그 줄, 이미 사진/링크 마커인 문단, 장면 설명으로 쓰기엔 너무 짧은 문단은 제외한다.
