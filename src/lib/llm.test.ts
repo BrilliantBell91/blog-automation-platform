@@ -5,6 +5,7 @@ import type { Post } from "@/types"
 const generateContentMock = vi.fn()
 const {
   searchRealImagesMock,
+  searchGoogleImagesMock,
   verifyImageRelevanceMock,
   searchNaverPlaceMock,
   fetchNaverPlaceDetailMock,
@@ -12,12 +13,13 @@ const {
   fetchMock,
 } = vi.hoisted(() => ({
   searchRealImagesMock: vi.fn().mockResolvedValue([]),
+  searchGoogleImagesMock: vi.fn().mockResolvedValue([]),
   verifyImageRelevanceMock: vi.fn().mockResolvedValue("relevant"),
   searchNaverPlaceMock: vi.fn().mockResolvedValue(null),
   fetchNaverPlaceDetailMock: vi.fn().mockResolvedValue(null),
   fetchNaverPlacePhotosMock: vi.fn().mockResolvedValue([]),
-  // Pollinations 이미지 생성(imageGen.ts)이 전역 fetch를 직접 호출한다. 실제 네트워크를
-  // 타지 않도록 항상 실패시켜 기존 테스트가 기대하는 Gemini 폴백 경로로 넘어가게 한다.
+  // verifyImageRelevanceMock이 실제 구현을 대체하므로 원래는 fetch가 호출될 일이 없지만,
+  // 혹시 놓친 경로가 실제 네트워크를 타지 않도록 안전망으로 항상 실패시켜둔다.
   fetchMock: vi.fn().mockResolvedValue({ ok: false }),
 }))
 
@@ -25,6 +27,7 @@ vi.stubGlobal("fetch", fetchMock)
 
 vi.mock("./imageSearch", () => ({
   searchRealImages: searchRealImagesMock,
+  searchGoogleImages: searchGoogleImagesMock,
 }))
 
 vi.mock("./naverLocalSearch", () => ({
@@ -599,30 +602,25 @@ describe("llm", () => {
       expect(searchRealImagesMock).not.toHaveBeenCalled() // place 사진으로 채워졌으니 키워드 검색은 하지 않음
     })
 
-    it("앞 슬롯에서 이미 고른 이미지는 다음 슬롯에서 재사용하지 않는다", async () => {
+    it("서로 다른 슬롯이 같은 이미지를 고르면 뒤 슬롯은 비워 중복 삽입을 막는다 (슬롯은 병렬 처리되어 실시간 조율은 하지 않음)", async () => {
       process.env.LLM_API_KEY = "test-key"
-      searchRealImagesMock
-        .mockResolvedValueOnce([
-          "https://search.example.com/shared.jpg",
-          "https://search.example.com/onlyA.jpg",
-        ])
-        .mockResolvedValueOnce([
-          "https://search.example.com/shared.jpg",
-          "https://search.example.com/onlyB.jpg",
-        ])
+      // 두 슬롯 모두 검색 결과의 첫 번째 후보(shared.jpg)를 고르므로 겹친다.
+      // 슬롯은 서로 독립적으로 병렬 실행되어(성능/타임아웃 개선 목적) 다른 슬롯이
+      // 무엇을 골랐는지 실시간으로 알 수 없으므로, 대체 후보를 찾는 대신 뒤 슬롯을 비운다.
+      searchRealImagesMock.mockResolvedValue([
+        "https://search.example.com/shared.jpg",
+        "https://search.example.com/onlyB.jpg",
+      ])
       generateContentMock.mockResolvedValueOnce({
         text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
       const result = await generateNaverDraft(mockPost)
 
-      expect(result).toContain(
-        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/shared.jpg]"
-      )
-      expect(result).toContain(
-        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/onlyB.jpg]"
-      )
-      expect(result).not.toContain("onlyA.jpg")
+      // shared.jpg는 한 번만 삽입되고, 중복된 두 번째 선택은 비워진다.
+      const occurrences = result.split("shared.jpg").length - 1
+      expect(occurrences).toBe(1)
+      expect(result).not.toContain("onlyB.jpg")
     })
 
     it("본문과 무관하다고 검증된 후보는 건너뛰고 관련 있는 다음 후보를 사용한다", async () => {

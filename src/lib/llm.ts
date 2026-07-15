@@ -1,15 +1,15 @@
-import { GoogleGenAI, ApiError } from "@google/genai"
+import { GoogleGenAI } from "@google/genai"
 import { Post, LlmAttachment } from "@/types"
-import { GEMINI_RATE_LIMIT } from "@/constants"
 import {
   generateAiImage,
   verifyImageRelevance,
   type IllustrativeImageStyle,
 } from "./imageGen"
-import { searchRealImages } from "./imageSearch"
+import { searchRealImages, searchGoogleImages } from "./imageSearch"
 import { searchNaverPlace } from "./naverLocalSearch"
 import { extractNaverPlaceId, fetchNaverPlaceDetail, fetchNaverPlacePhotos } from "./naverPlaceDetail"
 import { extractLinkLabel } from "./naverDraftParser"
+import { withRetry, shouldTryNextModel } from "./geminiRetry"
 
 // 무료 티어 할당량은 모델별로 독립적으로 차감된다(실측 확인됨: gemini-3.5-flash가
 // 하루 한도로 막혀도 다른 모델은 정상 동작). 앞쪽부터 시도하고 할당량 소진(429)이나
@@ -22,36 +22,6 @@ export const MODEL_FALLBACK_CHAIN = [
 ] as const
 // 링크가 여러 개면 url_context 툴이 추가로 페이지를 fetch하느라 시간이 더 걸릴 수 있어 여유를 둔다.
 const TIMEOUT_MS = 45_000
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-// 429(rate limit)와 503(일시 과부하 - 실측 확인됨)은 같은 모델로 잠시 후
-// 재시도하면 회복될 수 있어 지수 백오프로 재시도한다.
-async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
-  let attempt = 0
-  while (true) {
-    try {
-      return await fn()
-    } catch (error) {
-      const isTransient = error instanceof ApiError && (error.status === 429 || error.status === 503)
-      if (!isTransient || attempt >= GEMINI_RATE_LIMIT.MAX_RETRIES) throw error
-      await sleep(GEMINI_RATE_LIMIT.RETRY_BACKOFF_MS * 2 ** attempt)
-      attempt++
-    }
-  }
-}
-
-// 재시도로도 해소되지 않는 429(할당량 소진), 404(이 계정에서 모델 미지원),
-// 503(모델 일시 과부하 - 실측 확인됨)이면 다음 모델로 넘어간다.
-// 그 외 에러(응답에 text 없음, 504 등)는 즉시 전파한다.
-function shouldTryNextModel(error: unknown): boolean {
-  return (
-    error instanceof ApiError &&
-    (error.status === 429 || error.status === 404 || error.status === 503)
-  )
-}
 
 // 카테고리별 실제 블로그(blog.naver.com/zmfflsp) 스타일 참고자료.
 // 2026-07-14에 카테고리별 실제 게시글을 직접 확인하고 정리한 내용:
@@ -342,7 +312,7 @@ async function pickVerifiedCandidate(
     if (usedUrls.has(candidate)) continue
     if (attemptsUsed >= remainingAttempts) break
     attemptsUsed++
-    const relevance = await verifyImageRelevance(apiKey, candidate, description)
+    const relevance = await verifyImageRelevance(apiKey, candidate, description, "downloaded")
     if (relevance === "unknown") {
       console.warn(`[llm] 이미지 관련성 확인 불가(검증 모델 호출 실패) - 안전하게 건너뜀: ${candidate}`)
     }
@@ -353,6 +323,7 @@ async function pickVerifiedCandidate(
 
 // AI 이미지를 생성하고 관련성을 검증해 통과한 이미지를 반환한다. 1회 생성 후
 // 검증 실패 시 1회 재생성해 다시 검증하고, 그래도 실패하면 null을 반환한다.
+// "generated" 소스로 검증하므로 의도된 카드뉴스 라벨 텍스트는 거부 사유가 되지 않는다.
 async function generateVerifiedAiImage(
   apiKey: string,
   description: string,
@@ -361,7 +332,7 @@ async function generateVerifiedAiImage(
   for (let attempt = 0; attempt < 2; attempt++) {
     const imageUrl = await generateAiImage(apiKey, description, style)
     if (!imageUrl) continue
-    const relevance = await verifyImageRelevance(apiKey, imageUrl, description)
+    const relevance = await verifyImageRelevance(apiKey, imageUrl, description, "generated")
     if (relevance === "relevant") return imageUrl
     if (relevance === "unknown") {
       console.warn("[llm] AI 생성 이미지 검증 불가(모델 호출 실패) - 안전하게 건너뜀")
@@ -370,14 +341,82 @@ async function generateVerifiedAiImage(
   return null
 }
 
+const MAX_VERIFY_ATTEMPTS_PER_SLOT = 6
+const MIN_ATTEMPTS_PER_SOURCE = 2
+
+// 슬롯 하나를 채운다: (1) place 사진 → (2) 네이버 검색 → (3) 구글 검색(보완) 순으로 시도.
+// 슬롯끼리 완전히 독립적으로 병렬 실행되므로(resolveShortfallImages 참고), usedUrls는
+// 슬롯 내부(place/검색/구글 후보 간) 중복만 막는다 — 슬롯 간 중복은 호출부에서 후처리한다.
+async function resolveSlotImage(
+  slotIndex: number,
+  description: string,
+  cleanTitle: string,
+  tags: string[],
+  placePhotos: string[],
+  apiKey: string
+): Promise<string | null> {
+  const usedUrls = new Set<string>()
+
+  const fromPlace = await pickVerifiedCandidate(
+    placePhotos,
+    usedUrls,
+    description,
+    apiKey,
+    MIN_ATTEMPTS_PER_SOURCE
+  )
+  if (fromPlace.pick) return fromPlace.pick
+  let remaining = MAX_VERIFY_ATTEMPTS_PER_SLOT - fromPlace.attemptsUsed
+
+  if (remaining >= MIN_ATTEMPTS_PER_SOURCE) {
+    const searchCandidates = await searchRealImages(
+      buildImageSearchQuery(cleanTitle, tags, slotIndex),
+      8
+    )
+    const fromSearch = await pickVerifiedCandidate(
+      searchCandidates,
+      usedUrls,
+      description,
+      apiKey,
+      remaining
+    )
+    if (fromSearch.pick) return fromSearch.pick
+    remaining -= fromSearch.attemptsUsed
+  }
+
+  // (3) 네이버 검색으로 못 채웠을 때만 구글 검색으로 보완 시도
+  if (remaining >= MIN_ATTEMPTS_PER_SOURCE) {
+    const googleCandidates = await searchGoogleImages(
+      buildImageSearchQuery(cleanTitle, tags, slotIndex),
+      8
+    )
+    const fromGoogle = await pickVerifiedCandidate(
+      googleCandidates,
+      usedUrls,
+      description,
+      apiKey,
+      remaining
+    )
+    if (fromGoogle.pick) return fromGoogle.pick
+  }
+
+  return null
+}
+
 // 부족한 이미지 개수를 채운다. 모든 카테고리가 동일한 파이프라인을 따른다:
 // (1) 첨부된 지도 URL의 place ID로 그 장소의 실제 사진(업체 등록/방문자 인증 사진) 시도
 // (2) 그걸로 못 채우면 슬롯마다 다른 검색어로 네이버 이미지 검색 시도
+// (2.5) 네이버로도 못 채우면 구글 이미지 검색으로 보완 시도
 // (3) allowAiFallback=true인 카테고리만, 그래도 못 채운 나머지를 검증 후 AI로 생성
-// allowAiFallback=false인 카테고리(나들이/맛집)는 (1)+(2)로 채우지 못한 슬롯을 비워둔다.
+// allowAiFallback=false인 카테고리(나들이/맛집)는 (1)+(2)+(2.5)로 채우지 못한 슬롯을 비워둔다.
 // place ID 기반 사진은 첨부 링크가 가리키는 바로 그 장소의 사진이라 검색과 달리
 // 다른 장소 사진이 섞일 일이 없다(실측 확인된 문제 - 이자카야 글에 검색으로 찾은
 // 무관한 피자 사진이 쓰인 사고).
+//
+// 슬롯 간 처리는 완전히 병렬(Promise.all)로 실행한다 — 예전에는 순차 처리라 슬롯
+// 수 × 최대 6회 검증이 그대로 누적되어 Vercel 함수 타임아웃에 걸릴 위험이 있었다.
+// 병렬화하면 슬롯끼리 usedUrls를 실시간 공유할 수 없으므로, 같은 이미지가 서로 다른
+// 슬롯에 중복 선택되는 경우 뒤의 슬롯을 비우는 후처리로 처리한다(슬롯마다 검색어가
+// 다르므로 중복 자체는 드묾).
 async function resolveShortfallImages(
   points: number[],
   paragraphs: string[],
@@ -390,51 +429,31 @@ async function resolveShortfallImages(
   const cleanTitle = cleanTitleForSearch(postTitle)
   const placePhotos = placeId ? await fetchNaverPlacePhotos(placeId, points.length * 5) : []
 
-  // 검증 시도를 두 단계로 나눠 place/search 각각에 최소 예산을 보장하고,
-  // 전체 예산을 늘린다 (3 → 6).
-  const MAX_VERIFY_ATTEMPTS_PER_SLOT = 6
-  const MIN_ATTEMPTS_PER_SOURCE = 2
-  const usedUrls = new Set<string>()
-  const results: (string | null)[] = []
-
-  for (let i = 0; i < points.length; i++) {
-    const description = paragraphs[points[i]].slice(0, 60)
-
-    // (1) place 사진 시도 (최소 MIN_ATTEMPTS_PER_SOURCE회)
-    const fromPlace = await pickVerifiedCandidate(
-      placePhotos,
-      usedUrls,
-      description,
-      apiKey,
-      MIN_ATTEMPTS_PER_SOURCE
+  const rawResults = await Promise.all(
+    points.map((pointIndex, i) =>
+      resolveSlotImage(
+        i,
+        paragraphs[pointIndex].slice(0, 60),
+        cleanTitle,
+        tags,
+        placePhotos,
+        apiKey
+      )
     )
-    let pick = fromPlace.pick
-    let remaining = MAX_VERIFY_ATTEMPTS_PER_SLOT - fromPlace.attemptsUsed
+  )
 
-    // (2) 검색 시도 (나머지 예산, 최소 MIN_ATTEMPTS_PER_SOURCE회)
-    if (!pick && remaining >= MIN_ATTEMPTS_PER_SOURCE) {
-      const searchCandidates = await searchRealImages(
-        buildImageSearchQuery(cleanTitle, tags, i),
-        8
-      )
-      const fromSearch = await pickVerifiedCandidate(
-        searchCandidates,
-        usedUrls,
-        description,
-        apiKey,
-        remaining
-      )
-      pick = fromSearch.pick
-    }
-
-    if (pick) usedUrls.add(pick)
-    results.push(pick)
-  }
+  // 슬롯 간 중복 제거(먼저 나온 슬롯이 우선)
+  const seenUrls = new Set<string>()
+  const results: (string | null)[] = rawResults.map((pick) => {
+    if (!pick || seenUrls.has(pick)) return null
+    seenUrls.add(pick)
+    return pick
+  })
 
   // allowAiFallback=false인 경우(나들이/맛집)는 여기서 반환. AI 생성은 하지 않음.
   if (!allowAiFallback) return results
 
-  // (3) AI 생성 (allowAiFallback=true인 경우만)
+  // (4) AI 생성 (allowAiFallback=true인 경우만)
   const missingIndexes = results
     .map((v, i) => (v === null ? i : -1))
     .filter((i) => i >= 0)

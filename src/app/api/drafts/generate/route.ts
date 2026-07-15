@@ -11,6 +11,10 @@ import type { GenerateDraftResponse } from "@/types/api"
 import type { DraftStatus } from "@/types"
 
 export const dynamic = "force-dynamic"
+// 이미지 소싱(장소사진/네이버·구글 검색/관련성 검증/AI 생성)까지 포함하면 처리 시간이
+// 길어질 수 있어 Vercel Hobby 플랜에서 설정 가능한 사실상 최대값으로 늘린다.
+// (실제 상한은 플랜 정책에 따라 달라질 수 있으니 Vercel 대시보드에서 재확인 권장)
+export const maxDuration = 60
 
 export async function POST(request: NextRequest) {
   // 인증 체크

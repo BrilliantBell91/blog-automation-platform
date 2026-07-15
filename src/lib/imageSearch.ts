@@ -45,17 +45,14 @@ const BLOCKED_IMAGE_DOMAINS = [
 ]
 
 // 개인 블로그/카페 게시판에서 캐싱된 이미지는 실측 결과 다른 사람의 워터마크가
-// 찍혀있는 경우가 많아(예: "ezday.co.kr/cache/board/...") 호스트명·경로 패턴으로 걸러낸다.
+// 찍혀있는 경우가 많아(예: "ezday.co.kr/cache/board/...") 경로 패턴으로 걸러낸다.
+// 예전에는 호스트명에 "blog."/"cafe."가 들어가면 통째로 차단했으나, 네이버 이미지 검색
+// 결과의 상당수가 네이버 자체 CDN(blogfiles.naver.net, cafefiles.naver.net 등)이라
+// 이 필터가 정상 이미지까지 광범위하게 걸러내는 문제가 실측으로 확인되어 제거했다.
+// 워터마크/광고 이미지 여부는 이제 verifyImageRelevance()의 비전 모델 검증이 최종
+// 방어선 역할을 한다. 네이버가 아닌 타 블로그 플랫폼(워터마크가 흔함)은 도메인으로 계속 차단한다.
 // (완벽한 워터마크 탐지는 이미지 분석이 필요해 여기서는 휴리스틱으로만 걸러냄)
-const BLOCKED_HOST_SUBSTRINGS = [
-  "blog.",
-  "cafe.",
-  "tistory.com",
-  "egloos.com",
-  "blogspot.com",
-  "wordpress.com",
-  "blogfiles",
-]
+const BLOCKED_HOST_SUBSTRINGS = ["tistory.com", "egloos.com", "blogspot.com", "wordpress.com"]
 const BLOCKED_PATH_PATTERNS = [/\/board\//i, /\/blog\//i, /\/cafe\//i]
 
 // GIF 등 움직이는 이미지나 확장자를 알 수 없는 링크는 블로그 사진으로 부적절하므로 제외하고,
@@ -113,6 +110,41 @@ export async function searchRealImages(query: string, count: number): Promise<st
     return links.filter(isUsableImageUrl).slice(0, count)
   } catch (error) {
     console.warn("[imageSearch] 네이버 이미지 검색 실패", error)
+    return []
+  }
+}
+
+const GOOGLE_CUSTOM_SEARCH_URL = "https://www.googleapis.com/customsearch/v1"
+
+// 네이버 검색으로 부족한 이미지를 보완하는 2차 소스. 2026-01-20부터 신규 Programmable
+// Search Engine은 "전체 웹 검색"이 막히고 콘솔에서 등록한 최대 50개 도메인 내에서만
+// 검색되므로(구글 공식 정책 변경), 특정 장소 실사 사진보다는 스톡/백과/정보성 이미지
+// 보완에 더 적합하다. 키가 없으면 조용히 건너뛴다(searchRealImages와 동일한 패턴).
+export async function searchGoogleImages(query: string, count: number): Promise<string[]> {
+  const apiKey = process.env.GOOGLE_SEARCH_API_KEY
+  const engineId = process.env.GOOGLE_SEARCH_ENGINE_ID
+  if (!apiKey || !engineId || count <= 0) return []
+
+  try {
+    // Custom Search API는 1회 요청당 최대 10개(num)만 반환하므로 그 안에서 여유 있게 요청한다.
+    const num = Math.min(count * 3, 10)
+    const url = `${GOOGLE_CUSTOM_SEARCH_URL}?key=${apiKey}&cx=${engineId}&q=${encodeURIComponent(
+      query
+    )}&searchType=image&num=${num}`
+    const res = await fetch(url)
+    if (!res.ok) {
+      console.warn("[imageSearch] 구글 이미지 검색 응답 오류", res.status)
+      return []
+    }
+
+    const data = (await res.json()) as { items?: { link?: string }[] }
+    const links = (data.items ?? [])
+      .map((item) => item.link)
+      .filter((link): link is string => Boolean(link))
+
+    return links.filter(isUsableImageUrl).slice(0, count)
+  } catch (error) {
+    console.warn("[imageSearch] 구글 이미지 검색 실패", error)
     return []
   }
 }
