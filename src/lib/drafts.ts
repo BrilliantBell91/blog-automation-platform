@@ -36,7 +36,7 @@ function mapRowToDraftListItem(row: PostWithDraft): DraftListItem {
 
 /**
  * 관리자 대시보드용 포스트+초안 목록 조회
- * 조회 전 Notion↔로컬 동기화 수행
+ * 조회 전 Notion↔로컬 동기화 수행. 대시보드는 Notion Status="발행됨"인 글만 노출.
  */
 export async function getDraftListItems(
   status?: DraftStatus | "all",
@@ -46,13 +46,16 @@ export async function getDraftListItems(
   // 먼저 Notion의 발행된 포스트를 로컬과 동기화
   await syncPublishedPosts()
 
-  // 상태 필터링 조건
-  const where =
+  // 초안 상태 필터링 조건
+  const draftFilter: Prisma.PostWhereInput =
     status && status !== "all"
       ? status === "미생성"
         ? { draft: null }
         : { draft: { status } }
-      : undefined
+      : {}
+
+  // 대시보드는 Notion Status="발행됨"인 글만 노출 (보관됨/초안으로 바뀌면 즉시 제외)
+  const where: Prisma.PostWhereInput = { status: "발행됨", ...draftFilter }
 
   // 조인 쿼리 실행
   const [rows, total] = await Promise.all([

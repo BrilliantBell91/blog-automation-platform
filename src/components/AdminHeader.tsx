@@ -8,11 +8,7 @@ import { toast } from "sonner"
 import { useState } from "react"
 import { signOut } from "next-auth/react"
 
-interface AdminHeaderProps {
-  userName?: string
-}
-
-export function AdminHeader({ userName }: AdminHeaderProps) {
+export function AdminHeader() {
   const [isRevalidating, setIsRevalidating] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
 
@@ -68,13 +64,8 @@ export function AdminHeader({ userName }: AdminHeaderProps) {
           </Button>
         </SheetTrigger>
         <Link href="/" className="truncate text-lg font-bold">
-          {/* 이모지는 순수 장식 요소이므로 스크린리더가 "관리자 페이지" 텍스트만 읽도록 처리 */}
-          <span aria-hidden="true">📝</span> 관리자 페이지
+          <span aria-hidden="true">📝</span> 아기부리새의 블로그 자동화 플랫폼
         </Link>
-        <span className="hidden text-sm text-muted-foreground sm:inline" aria-hidden="true">
-          &gt;
-        </span>
-        <span className="hidden text-sm text-muted-foreground sm:inline">초안 대시보드</span>
       </div>
       <div className="flex shrink-0 items-center gap-3">
         {/* Task 012: 홈페이지 캐시 재검증 버튼 */}
@@ -87,9 +78,8 @@ export function AdminHeader({ userName }: AdminHeaderProps) {
           title="홈페이지 캐시 재검증 (최근 Notion 변경 사항 즉시 반영)"
         >
           <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
-          {isRevalidating ? "재검증 중..." : "캐시 새로고침"}
+          {isRevalidating ? "재검증 중..." : "새로고침"}
         </Button>
-        <span className="hidden text-sm sm:inline">{userName || "게스트"}</span>
         <Button
           variant="outline"
           size="sm"
