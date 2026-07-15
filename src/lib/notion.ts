@@ -243,8 +243,7 @@ function firstImageBlock(blocks: NotionBlock[]): NotionBlock | undefined {
 
 async function mapPageToPost(page: PageObjectResponse): Promise<Post> {
   const blocks = await getPageBlocks(page.id)
-  const cover = getCoverImageUrl(page)
-  const fallbackImageBlock = cover ? undefined : firstImageBlock(blocks)
+  const thumbnailBlock = firstImageBlock(blocks)
 
   return {
     id: page.id,
@@ -254,13 +253,13 @@ async function mapPageToPost(page: PageObjectResponse): Promise<Post> {
     excerpt: blocksToExcerpt(blocks),
     category: getSelect(page, "Category"),
     tags: getTags(page, "Tags"),
-    imageUrl: cover ?? fallbackImageBlock?.imageUrl,
+    imageUrl: thumbnailBlock?.imageUrl,
     status: (getSelect(page, "Status") || "초안") as Post["status"],
     publishedAt: getDate(page, "Published"),
     naverDraftStatus: (getSelect(page, "NaverDraftStatus") || "미생성") as Post["naverDraftStatus"],
     naverPostUrl: getUrl(page, "NaverPostUrl"),
     blocks,
-    thumbnailBlockId: fallbackImageBlock?.id,
+    thumbnailBlockId: thumbnailBlock?.id,
     keywords: getKeywords(page, "Content"),
     contentAttachments: [
       ...blocksToAttachments(blocks),

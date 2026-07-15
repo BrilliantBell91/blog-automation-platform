@@ -53,7 +53,7 @@ export interface Post {
   naverDraftStatus: DraftStatus
   naverPostUrl?: string
   blocks?: NotionBlock[] // 본문 렌더링용 (상세 페이지에서 사용)
-  thumbnailBlockId?: string // imageUrl이 "본문 첫 이미지 폴백"일 때만 채워짐 (재조회용)
+  thumbnailBlockId?: string // imageUrl이 본문 첫 이미지일 때 채워짐 (카드 썸네일 만료 시 재조회용)
   keywords?: string[] // Notion "Content" 속성(글의 핵심 내용) - 있으면 네이버 초안에 반드시 포함
   contentAttachments?: LlmAttachment[] // 네이버 초안 생성용 사진/링크 첨부 (공개 사이트에는 노출 안 함)
   createdAt: Date
