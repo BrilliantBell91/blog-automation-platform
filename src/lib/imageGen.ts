@@ -179,20 +179,23 @@ export async function verifyImageRelevance(
   let lastError: unknown
   for (const model of VERIFY_MODEL_FALLBACK_CHAIN) {
     try {
-      const response = await withRetry(() =>
-        ai.models.generateContent({
-          model,
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { inlineData: { mimeType, data: base64 } },
-                { text: buildVerifyPrompt(description, source) },
-              ],
-            },
-          ],
-        })
-      )
+      // 폴백 체인 자체가 "이 모델이 안 되면 다음 모델"이라는 회복 수단이라 withRetry(지수
+      // 백오프)로 감쌀 필요가 없다 — 오히려 모델당 최대 14초씩 대기가 쌓여 검증 1회가
+      // 최악의 경우 4개 모델 × 14초 = 56초까지 걸리고, 슬롯당 최대 6회 검증이 겹치면
+      // 함수 타임아웃(300초)을 넘기는 사고가 실측으로 확인됐다. 각 모델은 1회만 시도하고
+      // 실패하면 대기 없이 바로 다음 모델로 넘어간다.
+      const response = await ai.models.generateContent({
+        model,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inlineData: { mimeType, data: base64 } },
+              { text: buildVerifyPrompt(description, source) },
+            ],
+          },
+        ],
+      })
 
       return (response.text ?? "").trim().startsWith("예") ? "relevant" : "irrelevant"
     } catch (error) {

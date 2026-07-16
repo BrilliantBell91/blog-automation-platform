@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { parseNaverDraft, naverDraftToHtml } from "./naverDraftParser"
+import { parseNaverDraft, naverDraftToHtml, refreshDraftImageUrls } from "./naverDraftParser"
 
 describe("parseNaverDraft", () => {
   it("사진 마커를 image 블록으로 변환한다", () => {
@@ -112,5 +112,52 @@ describe("naverDraftToHtml", () => {
       "<p>https://map.naver.com/p/search/place?searchText=%EB%B6%80%ED%8F%89</p>"
     )
     expect(html).not.toContain("<a href=")
+  })
+})
+
+describe("refreshDraftImageUrls", () => {
+  it("경로가 일치하는 Notion 첨부 사진 URL을 최신 서명 URL로 치환한다", () => {
+    const content =
+      "안녕하세요.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://prod-files-secure.s3.ap-northeast-2.amazonaws.com/abc/photo.jpg?X-Amz-Signature=stale]\n\n마무리 인사."
+    const attachments = [
+      {
+        kind: "image" as const,
+        url: "https://prod-files-secure.s3.ap-northeast-2.amazonaws.com/abc/photo.jpg?X-Amz-Signature=fresh",
+      },
+    ]
+
+    const result = refreshDraftImageUrls(content, attachments)
+
+    expect(result).toContain(
+      "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://prod-files-secure.s3.ap-northeast-2.amazonaws.com/abc/photo.jpg?X-Amz-Signature=fresh]"
+    )
+    expect(result).not.toContain("X-Amz-Signature=stale")
+  })
+
+  it("경로가 일치하는 첨부가 없으면(검색/생성 이미지 등) URL을 그대로 둔다", () => {
+    const content =
+      "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real.jpg]"
+    const attachments = [
+      { kind: "image" as const, url: "https://prod-files-secure.s3.ap-northeast-2.amazonaws.com/abc/photo.jpg?sig=fresh" },
+    ]
+
+    const result = refreshDraftImageUrls(content, attachments)
+
+    expect(result).toBe(content)
+  })
+
+  it("첨부가 없으면 원본 텍스트를 그대로 반환한다", () => {
+    const content = "안녕하세요.\n\n마무리 인사."
+    expect(refreshDraftImageUrls(content, [])).toBe(content)
+  })
+
+  it("텍스트/링크/해시태그 문단은 건드리지 않는다", () => {
+    const content =
+      "일반 문단입니다.\n\n[참고링크 - 지도/메뉴/리뷰 등 실제로 확인되는 내용만 반영: https://map.naver.com/p/123]\n\n#태그1 #태그2"
+    const attachments = [
+      { kind: "image" as const, url: "https://prod-files-secure.s3.ap-northeast-2.amazonaws.com/abc/photo.jpg?sig=fresh" },
+    ]
+
+    expect(refreshDraftImageUrls(content, attachments)).toBe(content)
   })
 })

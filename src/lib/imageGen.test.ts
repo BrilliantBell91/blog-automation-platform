@@ -178,45 +178,33 @@ describe("imageGen", () => {
       expect(generateContentMock).toHaveBeenCalledTimes(1)
     })
 
-    it("첫 번째 검증 모델이 자체 재시도까지 모두 소진하면 다음 모델로 자동 전환한다", async () => {
-      vi.useFakeTimers()
+    it("첫 번째 검증 모델이 실패하면 대기 없이 즉시 다음 모델로 전환한다", async () => {
       mockImageDownloadOk()
       const { ApiError } = await import("@google/genai")
-      const quotaError = () => new ApiError({ message: "Too Many Requests", status: 429 })
-      // 첫 모델: 최초 시도 + withRetry 자체 재시도(MAX_RETRIES=3) = 4회 모두 실패
+      // 폴백 체인 자체가 회복 수단이라 모델당 재시도는 하지 않는다(withRetry 미사용) —
+      // 1회 실패하면 바로 다음 모델로 넘어가 검증 지연이 쌓이지 않는다.
       generateContentMock
-        .mockRejectedValueOnce(quotaError())
-        .mockRejectedValueOnce(quotaError())
-        .mockRejectedValueOnce(quotaError())
-        .mockRejectedValueOnce(quotaError())
-        // 두 번째 모델: 첫 시도에 성공
+        .mockRejectedValueOnce(new ApiError({ message: "Too Many Requests", status: 429 }))
         .mockResolvedValueOnce({ text: "예" })
 
-      const promise = verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
-      await vi.runAllTimersAsync()
-      const result = await promise
+      const result = await verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
 
       expect(result).toBe("relevant")
-      expect(generateContentMock).toHaveBeenCalledTimes(5)
-      vi.useRealTimers()
+      expect(generateContentMock).toHaveBeenCalledTimes(2)
     })
 
     it("모든 검증 모델이 할당량 소진이면 unknown을 반환한다", async () => {
-      vi.useFakeTimers()
       mockImageDownloadOk()
       const { ApiError } = await import("@google/genai")
       generateContentMock.mockRejectedValue(
         new ApiError({ message: "Too Many Requests", status: 429 })
       )
 
-      const promise = verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
-      await vi.runAllTimersAsync()
-      const result = await promise
+      const result = await verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
 
       expect(result).toBe("unknown")
-      // VERIFY_MODEL_FALLBACK_CHAIN 4개 모델 × 모델당 최초시도+재시도 4회 = 16회
-      expect(generateContentMock).toHaveBeenCalledTimes(16)
-      vi.useRealTimers()
+      // VERIFY_MODEL_FALLBACK_CHAIN 4개 모델, 모델당 1회씩만 시도(재시도 없음) = 4회
+      expect(generateContentMock).toHaveBeenCalledTimes(4)
     })
   })
 })

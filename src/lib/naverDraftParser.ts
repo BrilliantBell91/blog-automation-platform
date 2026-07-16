@@ -1,6 +1,8 @@
 // 네이버 초안 텍스트(순수 텍스트 + 마커)를 실제 블로그 화면처럼 렌더링하기 위한 블록으로 분류한다.
 // src/lib/llm.ts의 프롬프트 규칙(사진 마커, 참고링크 마커, 해시태그 줄 형식)을 기준으로 파싱한다.
 
+import type { LlmAttachment } from "@/types"
+
 export type NaverDraftBlock =
   | { type: "image"; url: string; caption?: string }
   | { type: "link"; url: string; label: string }
@@ -57,6 +59,50 @@ function splitLeadingQuoteLine(
   if (!rest) return null
 
   return { heading: first.trim().replace(/^>\s*/, ""), rest }
+}
+
+// URL의 쿼리스트링(서명 등)을 제거한 "경로" 부분만 뽑아낸다. Notion 첨부 사진의 S3 서명
+// URL은 버킷/키(경로)는 고정이고 서명(X-Amz-* 쿼리스트링)만 재조회 때마다 바뀌므로,
+// 경로가 같으면 "같은 사진의 최신 서명"이라고 판단할 수 있다.
+function urlPath(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    return parsed.origin + parsed.pathname
+  } catch {
+    return null
+  }
+}
+
+// Draft.generatedContent에는 초안 생성 시점의 Notion 이미지 URL(S3 서명 URL, 약 1시간 후
+// 만료)이 [사진 원본 ...: <url>] 마커에 문자열로 그대로 박제된다. 생성 후 시간이 지나면
+// 그 URL이 만료돼 NaverDraftView가 깨진 이미지를 보여주는 사고가 실측으로 확인됐다.
+// 렌더링 시점에 그 포스트의 최신 Notion 첨부 목록(attachments)을 받아, 경로가 일치하는
+// 사진 마커의 URL만 최신 서명 URL로 치환한다. 검색 결과/생성 이미지 등 Notion이 아닌
+// 이미지는 애초에 attachments에 없거나 경로가 안 맞으므로 그대로 둔다. DB에 저장된
+// generatedContent 자체는 바꾸지 않고 렌더링 직전에만 적용하는 표시 계층 처리다.
+export function refreshDraftImageUrls(content: string, attachments: LlmAttachment[]): string {
+  const freshByPath = new Map<string, string>()
+  for (const attachment of attachments) {
+    if (attachment.kind !== "image") continue
+    const path = urlPath(attachment.url)
+    if (path) freshByPath.set(path, attachment.url)
+  }
+  if (freshByPath.size === 0) return content
+
+  const paragraphs = content.split("\n\n")
+  const updated = paragraphs.map((paragraph) => {
+    const match = paragraph.match(PHOTO_MARKER)
+    if (!match) return paragraph
+
+    const staleUrl = match[1]
+    const path = urlPath(staleUrl)
+    const freshUrl = path ? freshByPath.get(path) : undefined
+    if (!freshUrl || freshUrl === staleUrl) return paragraph
+
+    return paragraph.replace(staleUrl, freshUrl)
+  })
+
+  return updated.join("\n\n")
 }
 
 export function parseNaverDraft(content: string): NaverDraftBlock[] {

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { getCachedPostById, getCachedPublishedPosts } from "@/lib/postsCache"
 import { getDraftByNotionId } from "@/lib/drafts"
+import { refreshDraftImageUrls } from "@/lib/naverDraftParser"
 import { generateMockPosts } from "@/lib/mockData"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
@@ -105,7 +106,9 @@ export default async function PostPage({ params }: PostPageProps) {
         <Separator />
 
         {draft ? (
-          <NaverDraftView content={draft.generatedContent} />
+          <NaverDraftView
+            content={refreshDraftImageUrls(draft.generatedContent, post.contentAttachments ?? [])}
+          />
         ) : (
           <PostBody
             blocks={post.blocks}

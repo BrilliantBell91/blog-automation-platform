@@ -2,6 +2,8 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 import { ChevronLeft } from "lucide-react"
 import { getDraftItemByPostId } from "@/lib/drafts"
+import { getCachedPostById } from "@/lib/postsCache"
+import { refreshDraftImageUrls } from "@/lib/naverDraftParser"
 import { NaverDraftView } from "@/components/NaverDraftView"
 import { CopyDraftButton } from "@/components/CopyDraftButton"
 
@@ -18,6 +20,16 @@ export default async function DraftBlogPreviewPage({ params }: DraftPreviewPageP
   }
 
   const { post, draft } = item
+
+  // Draft.generatedContent에는 생성 시점의 Notion 이미지 URL(약 1시간 후 만료되는 S3
+  // 서명 URL)이 그대로 박제돼 있어, 시간이 지나면 첨부 사진이 깨져 보이는 문제가 실측
+  // 확인됐다. 로컬 Post(Prisma)는 contentAttachments를 저장하지 않으므로(Notion 전용
+  // 런타임 필드), notionId로 최신 Notion 데이터를 한 번 더 조회해 렌더링 직전에만
+  // URL을 최신 서명으로 치환한다(DB에 저장된 원본 텍스트 자체는 바꾸지 않음).
+  const notionPost = draft ? await getCachedPostById(post.notionId).catch(() => null) : null
+  const displayContent = draft
+    ? refreshDraftImageUrls(draft.generatedContent, notionPost?.contentAttachments ?? [])
+    : ""
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -37,10 +49,10 @@ export default async function DraftBlogPreviewPage({ params }: DraftPreviewPageP
         <>
           {/* 실제 게시글처럼 보이도록 카드 형태로 감싼다 */}
           <article className="rounded-lg border bg-card p-6 sm:p-10">
-            <NaverDraftView content={draft.generatedContent} />
+            <NaverDraftView content={displayContent} />
           </article>
           <div className="flex justify-end">
-            <CopyDraftButton content={draft.generatedContent} />
+            <CopyDraftButton content={displayContent} />
           </div>
         </>
       ) : (
