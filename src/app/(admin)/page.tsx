@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { Search } from "lucide-react"
 import { getCachedPublishedPosts, getCachedCategories } from "@/lib/postsCache"
+import { applyDraftThumbnails } from "@/lib/drafts"
 import { PostList } from "@/components/PostList"
 import { CategoryFilter } from "@/components/CategoryFilter"
 import { Pagination } from "@/components/Pagination"
@@ -21,9 +22,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const categories = await getCachedCategories()
 
   const totalPages = Math.max(1, Math.ceil(allPosts.length / POSTS_PER_PAGE))
-  const pagedPosts = allPosts.slice(
-    (currentPage - 1) * POSTS_PER_PAGE,
-    currentPage * POSTS_PER_PAGE
+  const pagedPosts = await applyDraftThumbnails(
+    allPosts.slice((currentPage - 1) * POSTS_PER_PAGE, currentPage * POSTS_PER_PAGE)
   )
 
   return (

@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { SearchX } from "lucide-react"
 import { searchPosts } from "@/lib/notion"
+import { applyDraftThumbnails } from "@/lib/drafts"
 import { SearchBar } from "@/components/SearchBar"
 import { PostList } from "@/components/PostList"
 import { Pagination } from "@/components/Pagination"
@@ -31,9 +32,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const allMatches = query ? await searchPosts(query, searchType) : []
 
   const totalPages = Math.max(1, Math.ceil(allMatches.length / POSTS_PER_PAGE))
-  const pagedPosts = allMatches.slice(
-    (currentPage - 1) * POSTS_PER_PAGE,
-    currentPage * POSTS_PER_PAGE
+  const pagedPosts = await applyDraftThumbnails(
+    allMatches.slice((currentPage - 1) * POSTS_PER_PAGE, currentPage * POSTS_PER_PAGE)
   )
 
   return (

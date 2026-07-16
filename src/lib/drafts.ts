@@ -3,6 +3,7 @@
 import { db } from "./db"
 import { syncPublishedPosts } from "./posts"
 import { tagsToArray } from "./formatters"
+import { parseNaverDraft } from "./naverDraftParser"
 import type { Prisma } from "@/generated/prisma/client"
 import type { Draft, DraftStatus, Post } from "@/types"
 
@@ -107,4 +108,40 @@ export async function getDraftByNotionId(notionId: string): Promise<Draft | null
     createdAt: row.draft.createdAt,
     updatedAt: row.draft.updatedAt,
   }
+}
+
+/**
+ * 카드 목록(메인/카테고리/검색)의 썸네일 폴백 — Notion 본문/속성 어디에도 이미지가
+ * 없는 글(post.imageUrl 없음)에 한해, 생성된 네이버 초안의 첫 번째 이미지를 썸네일로
+ * 대신 쓴다. 초안 이미지는 검색/장소사진/AI 생성으로 채워지므로, Notion에는 사진이
+ * 없어도 초안에는 있는 경우(예: 정보성 글에 AI 인포그래픽만 삽입된 경우) 카드가 계속
+ * 회색 플레이스홀더로 남는 문제를 해결한다. 초안이 없거나 초안에도 이미지가 없으면
+ * (예: 방문후기 글인데 검색으로도 못 찾은 경우) 그대로 플레이스홀더로 남는다 — 실제로
+ * 보여줄 이미지가 없는 게 맞으므로 이건 버그가 아니다.
+ * 초안 이미지는 검색 결과/Pollinations/Gemini data URI라 Notion 서명 URL과 달리
+ * 만료되지 않으므로 별도 재조회(refreshKind) 처리는 필요 없다.
+ */
+export async function applyDraftThumbnails(posts: Post[]): Promise<Post[]> {
+  const targetNotionIds = posts.filter((p) => !p.imageUrl).map((p) => p.notionId)
+  if (targetNotionIds.length === 0) return posts
+
+  const rows = await db.post.findMany({
+    where: { notionId: { in: targetNotionIds }, draft: { isNot: null } },
+    include: { draft: true },
+  })
+
+  const imageByNotionId = new Map<string, string>()
+  for (const row of rows) {
+    if (!row.draft) continue
+    const firstImage = parseNaverDraft(row.draft.generatedContent).find(
+      (block) => block.type === "image"
+    )
+    if (firstImage) imageByNotionId.set(row.notionId, firstImage.url)
+  }
+  if (imageByNotionId.size === 0) return posts
+
+  return posts.map((post) => {
+    const draftImage = imageByNotionId.get(post.notionId)
+    return post.imageUrl || !draftImage ? post : { ...post, imageUrl: draftImage }
+  })
 }
