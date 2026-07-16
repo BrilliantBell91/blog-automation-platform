@@ -71,7 +71,10 @@ export default async function PostPage({ params }: PostPageProps) {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-8">
-      {post.imageUrl && (
+      {/* 초안(NaverDraftView)이 있으면 본문 첫 이미지가 이미 리드 사진 역할을 하므로
+          상단 대표 이미지를 따로 보여주면 같은 사진이 중복 노출된다 — 초안이 없을
+          때(Notion 원본 표시)만 상단 대표 이미지를 보여준다. */}
+      {!draft && post.imageUrl && (
         <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-muted">
           <OptimizedImage
             src={post.imageUrl}
@@ -80,7 +83,7 @@ export default async function PostPage({ params }: PostPageProps) {
             preload
             blockId={post.thumbnailBlockId}
             pageId={post.notionId}
-            refreshKind={post.thumbnailSource}
+            refreshKind={post.thumbnailSource === "draft" ? undefined : post.thumbnailSource}
             className="object-cover"
           />
         </div>

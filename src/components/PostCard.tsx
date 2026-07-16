@@ -20,14 +20,24 @@ export function PostCard({ post }: PostCardProps) {
     >
       {/* 이미지 유무와 관계없이 항상 표시되는 썸네일 영역 (카테고리 배지 포함) */}
       <div className="relative aspect-video w-full overflow-hidden bg-muted">
-        {post.imageUrl ? (
+        {post.imageUrl && post.thumbnailSource === "draft" ? (
+          // 초안(검색 결과/Pollinations 등)에서 가져온 썸네일은 도메인이 제각각이라
+          // next/image remotePatterns로 전부 허용할 수 없어 일반 img로 렌더링한다
+          // (NaverDraftView와 동일한 이유). object-cover로 카드 비율에 맞게 채운다.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={post.imageUrl}
+            alt={post.title}
+            className="h-full w-full object-cover transition-transform group-hover:scale-105"
+          />
+        ) : post.imageUrl ? (
           <OptimizedImage
             src={post.imageUrl}
             alt={post.title}
             variant="thumbnail"
             blockId={post.thumbnailBlockId}
             pageId={post.notionId}
-            refreshKind={post.thumbnailSource}
+            refreshKind={post.thumbnailSource === "draft" ? undefined : post.thumbnailSource}
             className="object-cover transition-transform group-hover:scale-105"
           />
         ) : (

@@ -119,7 +119,10 @@ export async function getDraftByNotionId(notionId: string): Promise<Draft | null
  * (예: 방문후기 글인데 검색으로도 못 찾은 경우) 그대로 플레이스홀더로 남는다 — 실제로
  * 보여줄 이미지가 없는 게 맞으므로 이건 버그가 아니다.
  * 초안 이미지는 검색 결과/Pollinations/Gemini data URI라 Notion 서명 URL과 달리
- * 만료되지 않으므로 별도 재조회(refreshKind) 처리는 필요 없다.
+ * 만료되지 않으므로 별도 재조회(refreshKind) 처리는 필요 없다. 다만 출처 도메인이
+ * 제각각이라(네이버/구글 검색 결과, Pollinations 등) next/image의 remotePatterns
+ * 허용 목록으로 전부 관리할 수 없으므로, thumbnailSource="draft"로 표시해 카드가
+ * next/image 대신 일반 <img> 태그로 렌더링하게 한다(NaverDraftView와 동일한 이유).
  */
 export async function applyDraftThumbnails(posts: Post[]): Promise<Post[]> {
   const targetNotionIds = posts.filter((p) => !p.imageUrl).map((p) => p.notionId)
@@ -142,6 +145,8 @@ export async function applyDraftThumbnails(posts: Post[]): Promise<Post[]> {
 
   return posts.map((post) => {
     const draftImage = imageByNotionId.get(post.notionId)
-    return post.imageUrl || !draftImage ? post : { ...post, imageUrl: draftImage }
+    return post.imageUrl || !draftImage
+      ? post
+      : { ...post, imageUrl: draftImage, thumbnailSource: "draft" as const }
   })
 }

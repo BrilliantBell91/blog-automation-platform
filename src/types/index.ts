@@ -56,8 +56,11 @@ export interface Post {
   thumbnailBlockId?: string // imageUrl이 본문 첫 이미지일 때 채워짐 (카드 썸네일 만료 시 재조회용)
   // imageUrl 출처 구분. "block"은 본문 첫 이미지(thumbnailBlockId로 재조회),
   // "property"는 본문에 이미지가 전혀 없어 Notion "Image" 속성 첫 파일로 폴백한 경우
-  // (재조회 시 pageId 기준으로 속성을 다시 조회해야 함 — 블록 ID가 없음).
-  thumbnailSource?: "block" | "property"
+  // (재조회 시 pageId 기준으로 속성을 다시 조회해야 함 — 블록 ID가 없음), "draft"는
+  // Notion에 이미지가 전혀 없어 생성된 초안(검색/Pollinations/Gemini 등 다양한 외부
+  // 도메인)의 첫 이미지로 폴백한 경우 — next/image remotePatterns 허용 목록 관리
+  // 부담을 피하기 위해 일반 <img> 태그로 렌더링해야 한다(NaverDraftView와 동일한 이유).
+  thumbnailSource?: "block" | "property" | "draft"
   keywords?: string[] // Notion "Content" 속성(글의 핵심 내용) - 있으면 네이버 초안에 반드시 포함
   contentAttachments?: LlmAttachment[] // 네이버 초안 생성용 사진/링크 첨부 (공개 사이트에는 노출 안 함)
   createdAt: Date
