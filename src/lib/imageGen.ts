@@ -117,8 +117,9 @@ export async function generateAiImage(
 // 순식간에 소진시켜 텍스트 생성까지 막히고, 결국 검증을 통과하는 후보가 하나도 없어
 // 검색/AI 이미지가 전부 빠지는 사고가 실측으로 확인됐다. 텍스트 생성과 겹치지 않는
 // 모델을 우선순위로 두고, 전부 실패하면 마지막으로 gemini-3-flash-preview도 시도한다.
+// gemini-2.0-flash는 이 API 키의 무료 티어에서 할당량이 아예 0(limit: 0)으로 응답이
+// 실측 확인되어 — 소진이 아니라 원천적으로 항상 실패하는 모델이라 체인에서 제외했다.
 const VERIFY_MODEL_FALLBACK_CHAIN = [
-  "gemini-2.0-flash",
   "gemini-flash-latest",
   "gemini-3.1-flash-lite",
   "gemini-3-flash-preview",

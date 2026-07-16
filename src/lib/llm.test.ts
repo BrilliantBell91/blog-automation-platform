@@ -701,6 +701,29 @@ describe("llm", () => {
       )
     })
 
+    it("AI 생성 이미지는 검증이 unknown이어도 그대로 채택한다 (검증 모델 전체 할당량 소진 상황 대비)", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock.mockResolvedValueOnce([]) // 검색 결과 없음 → AI 생성으로 폴백
+      verifyImageRelevanceMock.mockResolvedValueOnce("unknown") // AI 생성 이미지 검증도 확인 불가
+      generateContentMock
+        .mockResolvedValueOnce({
+          text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+        })
+        .mockResolvedValueOnce({
+          candidates: [
+            { content: { parts: [{ inlineData: { data: "IMG1", mimeType: "image/png" } }] } },
+          ],
+        })
+
+      const result = await generateNaverDraft({ ...mockPost, category: "기타" })
+
+      // irrelevant가 아니라 unknown이므로 재생성하지 않고 첫 시도 결과를 그대로 채택
+      expect(generateContentMock).toHaveBeenCalledTimes(2)
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]"
+      )
+    })
+
     it("제목에 [테스트] 같은 대괄호 접두사가 있으면 검색어에서 제거한다", async () => {
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock.mockResolvedValue(["https://search.example.com/real.jpg"])

@@ -203,8 +203,9 @@ describe("imageGen", () => {
       const result = await verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
 
       expect(result).toBe("unknown")
-      // VERIFY_MODEL_FALLBACK_CHAIN 4개 모델, 모델당 1회씩만 시도(재시도 없음) = 4회
-      expect(generateContentMock).toHaveBeenCalledTimes(4)
+      // VERIFY_MODEL_FALLBACK_CHAIN 3개 모델(gemini-2.0-flash는 limit:0 확인되어 제외됨),
+      // 모델당 1회씩만 시도(재시도 없음) = 3회
+      expect(generateContentMock).toHaveBeenCalledTimes(3)
     })
   })
 })

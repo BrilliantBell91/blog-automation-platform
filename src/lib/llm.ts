@@ -330,8 +330,17 @@ async function pickVerifiedCandidate(
 }
 
 // AI 이미지를 생성하고 관련성을 검증해 통과한 이미지를 반환한다. 1회 생성 후
-// 검증 실패 시 1회 재생성해 다시 검증하고, 그래도 실패하면 null을 반환한다.
-// "generated" 소스로 검증하므로 의도된 카드뉴스 라벨 텍스트는 거부 사유가 되지 않는다.
+// 검증에서 명시적으로 "무관하다"고 판정되면(irrelevant) 1회 재생성해 다시 검증하고,
+// 그래도 실패하면 null을 반환한다. "generated" 소스로 검증하므로 의도된 카드뉴스
+// 라벨 텍스트는 거부 사유가 되지 않는다.
+//
+// "unknown"(검증 모델 호출 자체가 실패 — 할당량 소진 등)은 여기서는 거부하지 않고
+// 그대로 채택한다. 검색/장소사진(다운로드된 외부 이미지, pickVerifiedCandidate 참고)과
+// 달리 AI 생성 이미지는 생성 프롬프트 자체에 "실존 인물/장소를 묘사하지 말 것" 지시가
+// 이미 들어가 있어 1차 안전장치가 있고, 검증은 이중 확인 성격이 강하다. 검증 모델
+// 전부가 할당량 소진으로 막혀 항상 unknown만 나오는 상황에서(실측 확인됨) unknown을
+// irrelevant와 동일하게 거부하면 생성에 성공한 이미지까지 매번 폐기되어 결과적으로
+// 이미지가 하나도 안 붙는 사고로 이어졌다.
 async function generateVerifiedAiImage(
   apiKey: string,
   description: string,
@@ -341,10 +350,10 @@ async function generateVerifiedAiImage(
     const imageUrl = await generateAiImage(apiKey, description, style)
     if (!imageUrl) continue
     const relevance = await verifyImageRelevance(apiKey, imageUrl, description, "generated")
-    if (relevance === "relevant") return imageUrl
     if (relevance === "unknown") {
-      console.warn("[llm] AI 생성 이미지 검증 불가(모델 호출 실패) - 안전하게 건너뜀")
+      console.warn("[llm] AI 생성 이미지 검증 불가(모델 호출 실패) - 생성 프롬프트의 안전장치를 믿고 채택")
     }
+    if (relevance !== "irrelevant") return imageUrl
   }
   return null
 }
