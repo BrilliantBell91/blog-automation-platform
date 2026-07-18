@@ -119,11 +119,62 @@ export async function generateAiImage(
 // 모델을 우선순위로 두고, 전부 실패하면 마지막으로 gemini-3-flash-preview도 시도한다.
 // gemini-2.0-flash는 이 API 키의 무료 티어에서 할당량이 아예 0(limit: 0)으로 응답이
 // 실측 확인되어 — 소진이 아니라 원천적으로 항상 실패하는 모델이라 체인에서 제외했다.
-const VERIFY_MODEL_FALLBACK_CHAIN = [
+export const VERIFY_MODEL_FALLBACK_CHAIN = [
   "gemini-flash-latest",
   "gemini-3.1-flash-lite",
   "gemini-3-flash-preview",
 ] as const
+
+// 이미지+텍스트 프롬프트를 비전 모델에 보내고 원문 응답 텍스트를 반환하는 저수준 헬퍼.
+// verifyImageRelevance와 동일한 모델 폴백 체인·재시도 정책(모델당 1회, 실패 시 바로 다음
+// 모델)을 공유해, 외관 사진 판별(thumbnail.ts)이나 사진 캡션 생성(imageMatching.ts) 같은
+// 다른 비전 판별 작업에서 재사용한다. verifyImageRelevance 자체는 "다운로드 실패=irrelevant,
+// 모델 호출 전부 실패=unknown"이라는 세밀한 구분이 필요해 별도로 유지하고 이 헬퍼로
+// 대체하지 않는다.
+export async function runVisionPrompt(
+  apiKey: string,
+  imageUrl: string,
+  promptText: string
+): Promise<string | null> {
+  let mimeType: string
+  let base64: string
+  try {
+    const imageRes = await fetch(imageUrl)
+    if (!imageRes.ok) return null
+    mimeType = imageRes.headers.get("content-type") || "image/jpeg"
+    base64 = Buffer.from(await imageRes.arrayBuffer()).toString("base64")
+  } catch (error) {
+    console.warn("[imageGen] 비전 프롬프트용 이미지 다운로드 실패", error)
+    return null
+  }
+
+  const ai = new GoogleGenAI({ apiKey })
+  for (const model of VERIFY_MODEL_FALLBACK_CHAIN) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inlineData: { mimeType, data: base64 } },
+              { text: promptText },
+            ],
+          },
+        ],
+      })
+      return (response.text ?? "").trim()
+    } catch (error) {
+      if (!shouldTryNextModel(error)) {
+        console.warn("[imageGen] 비전 프롬프트 호출 실패 - 확인 불가로 처리", error)
+        return null
+      }
+      console.warn(`[imageGen] ${model} 사용 불가(할당량 소진/미지원) — 다음 모델로 전환`, error)
+    }
+  }
+  console.warn("[imageGen] 비전 프롬프트 호출 - 모든 모델 할당량 소진")
+  return null
+}
 
 // "irrelevant"는 모델이 실제로 "무관하다/부적절하다"고 답한 경우, "unknown"은 검증
 // 자체(할당량 소진 등)가 실패해 답을 못 받은 경우다. 검증을 못 한 "unknown"도

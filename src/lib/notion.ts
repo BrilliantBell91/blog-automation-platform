@@ -11,7 +11,8 @@ import type { PageObjectResponse, BlockObjectResponse } from "@notionhq/client"
 import { Post, NotionBlock, LlmAttachment } from "@/types"
 import { NOTION_RATE_LIMIT, NOTION_DATABASE_ID } from "@/constants"
 
-const notion = new Client({ auth: process.env.NOTION_API_KEY })
+// 대량 이미지 업로드(api/admin/notion/uploads)에서도 같은 클라이언트를 재사용하기 위해 export한다.
+export const notion = new Client({ auth: process.env.NOTION_API_KEY })
 
 let cachedDataSourceId: string | null = null
 

@@ -658,6 +658,14 @@ describe("llm", () => {
             { content: { parts: [{ inlineData: { data: "IMG1", mimeType: "image/png" } }] } },
           ],
         })
+        // 후보 문단이 1개뿐이라도 목표 이미지 개수(기타=2)만큼 부족분 슬롯이 전부 시도되므로
+        // (셀렉트 포인트 순환 수정 이후의 정상 동작 — 과거엔 두 번째 슬롯이 조용히 누락됐음)
+        // 두 번째 슬롯용 AI 생성 응답도 큐에 넣어준다.
+        .mockResolvedValueOnce({
+          candidates: [
+            { content: { parts: [{ inlineData: { data: "IMG2", mimeType: "image/png" } }] } },
+          ],
+        })
 
       const result = await generateNaverDraft({ ...mockPost, category: "기타" })
 
@@ -665,7 +673,10 @@ describe("llm", () => {
       expect(result).toContain(
         "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]"
       )
-      expect(generateContentMock).toHaveBeenCalledTimes(2) // 텍스트 생성 + AI 이미지 생성 폴백
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]"
+      )
+      expect(generateContentMock).toHaveBeenCalledTimes(3) // 텍스트 생성 + AI 이미지 생성 2회(부족분 슬롯 2개 전부 시도)
     })
 
     it("슬롯당 검증 시도가 최대값(6회)를 넘으면 AI 생성으로 폴백한다 (allowAiFallback=true인 경우만)", async () => {
@@ -714,13 +725,23 @@ describe("llm", () => {
             { content: { parts: [{ inlineData: { data: "IMG1", mimeType: "image/png" } }] } },
           ],
         })
+        // 목표 이미지 개수(기타=2)만큼 부족분 슬롯 2개가 전부 시도되므로 두 번째 슬롯용
+        // AI 생성 응답도 큐에 넣어준다.
+        .mockResolvedValueOnce({
+          candidates: [
+            { content: { parts: [{ inlineData: { data: "IMG2", mimeType: "image/png" } }] } },
+          ],
+        })
 
       const result = await generateNaverDraft({ ...mockPost, category: "기타" })
 
       // irrelevant가 아니라 unknown이므로 재생성하지 않고 첫 시도 결과를 그대로 채택
-      expect(generateContentMock).toHaveBeenCalledTimes(2)
+      expect(generateContentMock).toHaveBeenCalledTimes(3)
       expect(result).toContain(
         "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]"
+      )
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]"
       )
     })
 
@@ -771,11 +792,18 @@ describe("llm", () => {
             { content: { parts: [{ inlineData: { data: "IMG1", mimeType: "image/png" } }] } },
           ],
         })
+        // 목표 이미지 개수(육아=2)만큼 부족분 슬롯 2개가 전부 시도되므로 두 번째 슬롯용
+        // AI 생성 응답도 큐에 넣어준다.
+        .mockResolvedValueOnce({
+          candidates: [
+            { content: { parts: [{ inlineData: { data: "IMG2", mimeType: "image/png" } }] } },
+          ],
+        })
 
       await generateNaverDraft({ ...mockPost, category: "육아" })
 
       expect(searchRealImagesMock).toHaveBeenCalled() // 이제 검색을 시도함
-      expect(generateContentMock).toHaveBeenCalledTimes(2) // 텍스트 생성 + AI 이미지 생성 폴백
+      expect(generateContentMock).toHaveBeenCalledTimes(3) // 텍스트 생성 + AI 이미지 생성 2회(부족분 슬롯 2개 전부 시도)
     })
 
     it("실사 스타일 카테고리(나들이/맛집)는 검색으로 다 못 채워도 AI로 대체하지 않고 그 자리를 비워둔다 (회귀 테스트)", async () => {
