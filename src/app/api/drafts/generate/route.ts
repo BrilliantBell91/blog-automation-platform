@@ -65,10 +65,11 @@ export async function POST(request: NextRequest) {
       where: { id: session.user.id },
     })
 
-    // LLM으로 초안 생성
+    // LLM으로 초안 생성 (외관 사진이 첨부 사진 중 하나라면 본문 최상단에 강제 배치)
     const generatedContent = await generateNaverDraft(
       notionPost,
-      user?.naverStyleGuide ?? undefined
+      user?.naverStyleGuide ?? undefined,
+      thumbnailUrl
     )
 
     // Draft upsert (기존 초안이 있으면 재생성)

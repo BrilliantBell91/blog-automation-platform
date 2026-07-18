@@ -2,16 +2,19 @@
 // 태그를 직접 쓰게 하지 않는데(과거 "LLM이 마커 형식을 임의로 변형해 이미지가 통째로
 // 사라진" 실측 사고 때문), 각주형 태그("[[사진2]]" 등)도 결국 LLM이 텍스트에 직접 쓰는
 // 마커라 같은 실패 모드에 노출된다. 그래서 이 모듈은 LLM에 어떤 추가 책임도 지우지 않고,
-// 사진 캡션과 문단 텍스트를 임베딩해 코사인 유사도로 코드가 100% 결정론적으로 배치를
-// 정한다.
+// 사진 캡션 키워드가 문단 텍스트에 등장하는 정도로 코드가 100% 결정론적으로 배치를 정한다.
+//
+// 임베딩 API(embedContent) 대신 키워드 겹침 방식을 쓰는 이유: 이 프로젝트의 무료 티어
+// API 키에서 일부 모델이 호출 자체가 막히는 사례(gemini-2.5-flash-image 등)가 이미
+// 여러 번 확인됐다. 임베딩 호출이 조용히 실패하면 매칭이 통째로 위치 기반 폴백으로
+// 전락해 "매칭이 전혀 안 된다"는 사고로 이어지므로, 추가 API 의존 없이 이미 확보한
+// 캡션 텍스트만으로 항상 동작하는 방식을 택했다.
 
-import { GoogleGenAI } from "@google/genai"
 import { runVisionPrompt } from "./imageGen"
 
-const EMBEDDING_MODEL = "text-embedding-004"
-
-const CAPTION_PROMPT = `이 사진의 핵심 피사체를 10~15자 내외의 짧은 한국어 명사구로 설명해주세요.
-예: "우니초밥 클로즈업", "가게 외관", "라떼 한 잔". 문장이 아니라 명사구로, 다른 설명 없이 그 문구만 답하세요.`
+const CAPTION_PROMPT = `이 사진의 핵심 피사체를 2~4개의 짧은 한국어 키워드로 나열해주세요(쉼표로 구분).
+예: "우니, 초밥, 클로즈업" 또는 "가게, 외관, 간판" 또는 "라떼, 커피잔".
+문장이 아니라 키워드만 쉼표로 구분해서, 다른 설명 없이 답하세요.`
 
 // Notion 첨부 사진의 label은 대개 원본 파일명("20180206_195520.jpg" 등)이라 의미가
 // 없다. 이런 경우만 비전 호출로 새로 캡션을 만들고, 사람이 실제로 입력한 캡션(파일명
@@ -28,49 +31,35 @@ export async function describeImage(
     return trimmedLabel
   }
   const text = await runVisionPrompt(apiKey, imageUrl, CAPTION_PROMPT)
-  return text && text.length > 0 ? text.slice(0, 30) : "사진"
+  return text && text.length > 0 ? text.slice(0, 60) : ""
 }
 
-// 여러 텍스트를 한 번의 배치 호출로 임베딩한다. 실패하면 각 항목에 빈 배열을 채워
-// 반환해(호출부가 "매칭 불가"로 처리) 전체 초안 생성이 중단되지 않게 한다.
-export async function embedTexts(apiKey: string, texts: string[]): Promise<number[][]> {
-  if (texts.length === 0) return []
-  try {
-    const ai = new GoogleGenAI({ apiKey })
-    const response = await ai.models.embedContent({
-      model: EMBEDDING_MODEL,
-      contents: texts,
-    })
-    const embeddings = response.embeddings ?? []
-    return texts.map((_, i) => embeddings[i]?.values ?? [])
-  } catch (error) {
-    console.warn("[imageMatching] 임베딩 생성 실패 - 매칭 없이 폴백", error)
-    return texts.map(() => [])
-  }
+// 캡션을 토큰(키워드) 배열로 쪼갠다. 쉼표/공백/구두점 기준으로 나누고, 조사 등 노이즈가
+// 섞이기 쉬운 1글자 토큰은 제외한다.
+function tokenize(text: string): string[] {
+  return text
+    .split(/[,\s./\\!?~()[\]{}'"#>*\-–—:;·]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2)
 }
 
-export function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length === 0 || b.length === 0 || a.length !== b.length) return -1
-  let dot = 0
-  let normA = 0
-  let normB = 0
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i]
-    normA += a[i] * a[i]
-    normB += b[i] * b[i]
-  }
-  if (normA === 0 || normB === 0) return -1
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB))
+// 캡션 키워드 중 문단 텍스트에 실제로 등장하는 비율로 유사도를 계산한다(부분 문자열
+// 포함 여부 — 한국어는 조사가 바로 붙어 정확한 단어 경계 매칭이 어려우므로 포함 검사가
+// 오히려 더 안정적으로 동작한다).
+function keywordOverlapScore(captionTokens: string[], paragraphText: string): number {
+  if (captionTokens.length === 0) return 0
+  const hits = captionTokens.filter((token) => paragraphText.includes(token)).length
+  return hits / captionTokens.length
 }
 
-// 이미지 각각을 유사도가 가장 높은 문단에 독립적으로 배정한다. 같은 문단을 여러 이미지가
-// 고르는 것을 막지 않는다 — 캡션이 비슷한 사진들(예: 초밥 사진 여러 장)은 유사도 1위
-// 문단이 겹치기 마련이고, 그 결과 같은 문단 뒤에 나란히 삽입되어 "비슷한 사진끼리 인접
-// 배치"되는 그룹핑 효과가 자연히 생긴다. 다만 crowdingPenalty로 이미 선택된 문단에는
-// 누적 페널티를 줘서, 정말 무관한 사진들까지 전부 한 문단으로 쏠리는 것은 막는다.
+// 이미지 각각을 캡션 키워드가 가장 많이 겹치는 문단에 독립적으로 배정한다. 겹치는
+// 키워드가 하나도 없으면(bestScore <= 0) 매칭 실패로 보고 null을 반환해, 호출부가
+// 폴백 위치를 쓰도록 한다. crowdingPenalty로 이미 선택된 문단에 누적 페널티를 줘서
+// 무관한 사진들까지 전부 한 문단으로 쏠리는 것은 막되, 캡션이 비슷한(=겹침이 큰)
+// 사진들은 같은 문단으로 몰려 자연히 인접 배치(그룹핑)되는 효과가 남는다.
 export function matchImagesToParagraphs(
-  images: { embedding: number[] }[],
-  candidateParagraphs: { index: number; embedding: number[] }[],
+  images: { caption: string }[],
+  candidateParagraphs: { index: number; text: string }[],
   crowdingPenalty = 0.15
 ): (number | null)[] {
   if (candidateParagraphs.length === 0) return images.map(() => null)
@@ -78,18 +67,21 @@ export function matchImagesToParagraphs(
   const usageCount = new Map<number, number>()
 
   return images.map((image) => {
-    if (image.embedding.length === 0) return null
+    const tokens = tokenize(image.caption)
+    if (tokens.length === 0) return null
 
-    let best = candidateParagraphs[0]
+    let best: { index: number; text: string } | null = null
     let bestScore = -Infinity
     for (const paragraph of candidateParagraphs) {
       const penalty = (usageCount.get(paragraph.index) ?? 0) * crowdingPenalty
-      const score = cosineSimilarity(image.embedding, paragraph.embedding) - penalty
+      const score = keywordOverlapScore(tokens, paragraph.text) - penalty
       if (score > bestScore) {
         bestScore = score
         best = paragraph
       }
     }
+    if (!best || bestScore <= 0) return null
+
     usageCount.set(best.index, (usageCount.get(best.index) ?? 0) + 1)
     return best.index
   })

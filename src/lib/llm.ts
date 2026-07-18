@@ -6,9 +6,10 @@ import {
   type IllustrativeImageStyle,
 } from "./imageGen"
 import { searchRealImages, searchGoogleImages } from "./imageSearch"
-import { describeImage, embedTexts, matchImagesToParagraphs } from "./imageMatching"
+import { describeImage, matchImagesToParagraphs } from "./imageMatching"
 import { searchNaverPlace } from "./naverLocalSearch"
 import { extractNaverPlaceId, fetchNaverPlaceDetail, fetchNaverPlacePhotos } from "./naverPlaceDetail"
+import { inferFacilityFromReviews } from "./naverReviewSearch"
 import { extractLinkLabel } from "./naverDraftParser"
 import { withRetry, shouldTryNextModel } from "./geminiRetry"
 
@@ -234,17 +235,20 @@ function isNaverMapUrl(url: string): boolean {
 // 제목으로는 검색하지 않는다 — 흔한 상호명(예: "잇키")을 제목만으로 검색하면 완전히 다른
 // 지점(부평→송도)을 잘못 매칭하는 사고가 실측으로 확인됐고, 사용자도 "정확한 URL을
 // 첨부할 것이니 그 URL 기준으로 반영해달라"고 명시적으로 요청했다.
-async function buildVerifiedPlaceInfoText(attachments: LlmAttachment[]): Promise<string> {
+async function buildVerifiedPlaceInfoText(
+  apiKey: string,
+  attachments: LlmAttachment[]
+): Promise<string> {
   const mapLink = attachments.find((a) => a.kind === "link" && isNaverMapUrl(a.url))
   if (!mapLink) return ""
 
   const placeId = extractNaverPlaceId(mapLink.url)
   let place = placeId ? await fetchNaverPlaceDetail(placeId) : null
 
+  const linkLabel = extractLinkLabel(mapLink.url)
   if (!place) {
-    const label = extractLinkLabel(mapLink.url)
-    if (label !== "지도에서 위치 보기") {
-      place = await searchNaverPlace(label)
+    if (linkLabel !== "지도에서 위치 보기") {
+      place = await searchNaverPlace(linkLabel)
     }
   }
 
@@ -258,7 +262,19 @@ async function buildVerifiedPlaceInfoText(attachments: LlmAttachment[]): Promise
   if (place.businessHours) lines.push(`- 영업시간: ${place.businessHours}`)
   if (place.conveniences?.length) lines.push(`- 편의시설: ${place.conveniences.join(", ")}`)
 
-  return `\n\n확인된 매장 정보 (사용자가 첨부한 지도 URL 기준 실제 확인된 사실 - 반드시 이 값과 정확히 일치하게 쓰고, 다른 곳에서 본 정보와 달라도 이 값을 따르세요. 여기 없는 항목(화장실 유무 등)은 확인되지 않은 것이니 언급하지 마세요):\n${lines.join("\n")}`
+  // 네이버 지도 상세 페이지에 화장실 정보가 없으면(conveniences에 언급 없음), 블로그
+  // 리뷰 검색으로 보수적으로 보완한다. 공식 정보가 아니므로 "리뷰 기준"으로 명확히
+  // 출처를 표시해, 모델이 지도 확인 사실과 동일한 신뢰도로 오인하지 않게 한다.
+  const hasRestroomInfo = place.conveniences?.some((c) => c.includes("화장실"))
+  if (!hasRestroomInfo) {
+    const placeName = place.name ?? (linkLabel !== "지도에서 위치 보기" ? linkLabel : undefined)
+    if (placeName) {
+      const restroomNote = await inferFacilityFromReviews(apiKey, placeName, "화장실")
+      if (restroomNote) lines.push(`- 화장실(리뷰 기준, 참고용): ${restroomNote}`)
+    }
+  }
+
+  return `\n\n확인된 매장 정보 (사용자가 첨부한 지도 URL 기준 실제 확인된 사실 - 반드시 이 값과 정확히 일치하게 쓰고, 다른 곳에서 본 정보와 달라도 이 값을 따르세요. "(리뷰 기준, 참고용)"이라고 표시된 항목은 공식 정보가 아니라 방문자 리뷰에서 확인된 내용이니, 상단 정보 요약에 넣을 때 "리뷰에 따르면" 같은 뉘앙스를 살짝 남겨도 됩니다. 그 외 여기 없는 항목은 확인되지 않은 것이니 언급하지 마세요):\n${lines.join("\n")}`
 }
 
 /**
@@ -563,7 +579,12 @@ function splitLongParagraphs(paragraphs: string[], maxLength = 200): string[] {
 // 모든 카테고리가 동일하게 (첨부 → 웹 검색) 파이프라인을 따르고,
 // allowAiFallback=true인 카테고리(결혼·육아·기타)만 AI 이미지로 보완한다.
 // allowAiFallback=false인 카테고리(나들이·맛집)는 부족한 슬롯을 비워둔다.
-async function insertImages(text: string, apiKey: string, post: Post): Promise<string> {
+async function insertImages(
+  text: string,
+  apiKey: string,
+  post: Post,
+  leadImageUrl?: string
+): Promise<string> {
   const attachments = (post.contentAttachments ?? []).filter((a) => a.kind === "image")
   const entry = post.category ? CATEGORY_STYLE_NOTES[post.category] : undefined
   const allowAiFallback = entry?.allowAiFallback ?? DEFAULT_ALLOW_AI_FALLBACK
@@ -614,28 +635,37 @@ async function insertImages(text: string, apiKey: string, post: Post): Promise<s
       `\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${imageUrl}]`
   }
 
-  // 앞쪽 자리(사용자 첨부 사진)는 위치 순서가 아니라 사진 내용과 문단 내용의 의미적
-  // 유사도로 배치한다 — 균등 간격 배치는 "우니초밥을 얘기하는 문단에 엉뚱한 사진이
-  // 붙는" 사고의 원인이었다. 비슷한 캡션의 사진들은 같은 문단으로 몰려 자연히
-  // 인접 배치(그룹핑)된다. 캡션/임베딩 호출이 실패해도(매칭 불가) 첨부 사진은
-  // 반드시 결과에 포함해야 하므로(전부 포함 불변식), 균등 배치로 골라둔 points를
-  // 폴백 위치로 쓴다.
-  if (attachments.length > 0) {
+  // 대표(외관) 사진이 있으면 가장 이른 후보 문단에 강제 배치한다 — 실제 블로그 글은
+  // 서두 직후 가게 외관 사진이 오는 경우가 많은데, 의미 매칭에만 맡기면 캡션이 애매한
+  // 외관 사진이 본문 중간/끝으로 밀리는 경우가 실측으로 확인됐다. 나머지 사진의 의미
+  // 매칭과는 독립적으로, 이 사진만 위치를 직접 지정한다.
+  const leadAttachment = leadImageUrl
+    ? attachments.find((a) => a.url === leadImageUrl)
+    : undefined
+  if (leadAttachment && candidates.length > 0) {
+    appendImageMarker(candidates[0], leadAttachment.url)
+  }
+  const matchableAttachments = leadAttachment
+    ? attachments.filter((a) => a.url !== leadAttachment.url)
+    : attachments
+
+  // 나머지 첨부 사진은 위치 순서가 아니라 사진 내용과 문단 내용의 키워드 겹침으로
+  // 배치한다 — 균등 간격 배치는 "우니초밥을 얘기하는 문단에 엉뚱한 사진이 붙는" 사고의
+  // 원인이었다. 비슷한 캡션의 사진들은 같은 문단으로 몰려 자연히 인접 배치(그룹핑)된다.
+  // 매칭이 실패해도(캡션 생성 실패, 겹치는 키워드 없음 등) 첨부 사진은 반드시 결과에
+  // 포함해야 하므로(전부 포함 불변식), 균등 배치로 골라둔 points를 폴백 위치로 쓴다.
+  if (matchableAttachments.length > 0) {
     const captions = await Promise.all(
-      attachments.map((a) => describeImage(apiKey, a.url, a.label))
+      matchableAttachments.map((a) => describeImage(apiKey, a.url, a.label))
     )
-    const candidateParagraphTexts = candidates.map((i) => paragraphs[i])
-    const [imageEmbeddings, paragraphEmbeddings] = await Promise.all([
-      embedTexts(apiKey, captions),
-      embedTexts(apiKey, candidateParagraphTexts),
-    ])
+    const candidateParagraphs = candidates.map((index) => ({ index, text: paragraphs[index] }))
 
     const matchedIndexes = matchImagesToParagraphs(
-      imageEmbeddings.map((embedding) => ({ embedding })),
-      candidates.map((index, i) => ({ index, embedding: paragraphEmbeddings[i] ?? [] }))
+      captions.map((caption) => ({ caption })),
+      candidateParagraphs
     )
 
-    attachments.forEach((attachment, i) => {
+    matchableAttachments.forEach((attachment, i) => {
       const paragraphIndex = matchedIndexes[i] ?? points[i % points.length]
       appendImageMarker(paragraphIndex, attachment.url)
     })
@@ -652,14 +682,20 @@ async function insertImages(text: string, apiKey: string, post: Post): Promise<s
 
 /**
  * LLM(Gemini)을 이용한 네이버 블로그 스타일 초안 생성
+ * leadImageUrl: 대표(외관) 사진으로 판별된 첨부 이미지 URL이 있으면, 본문 최상단
+ * 이미지 자리에 강제로 배치한다(thumbnail.ts의 resolveThumbnailUrl 결과를 그대로 전달).
  */
-export async function generateNaverDraft(post: Post, styleGuide?: string): Promise<string> {
+export async function generateNaverDraft(
+  post: Post,
+  styleGuide?: string,
+  leadImageUrl?: string
+): Promise<string> {
   const apiKey = process.env.LLM_API_KEY
   if (!apiKey) {
     throw new Error("LLM_API_KEY가 설정되지 않았습니다.")
   }
 
-  const verifiedPlaceInfoText = await buildVerifiedPlaceInfoText(post.contentAttachments ?? [])
+  const verifiedPlaceInfoText = await buildVerifiedPlaceInfoText(apiKey, post.contentAttachments ?? [])
 
   const ai = new GoogleGenAI({ apiKey })
   const contents = buildUserMessage(post, verifiedPlaceInfoText)
@@ -680,7 +716,7 @@ export async function generateNaverDraft(post: Post, styleGuide?: string): Promi
         throw new Error("LLM 응답에서 텍스트를 추출할 수 없습니다.")
       }
 
-      return await insertImages(response.text, apiKey, post)
+      return await insertImages(response.text, apiKey, post, leadImageUrl)
     } catch (error) {
       if (!shouldTryNextModel(error)) throw error
       console.warn(`[llm] ${model} 사용 불가(할당량 소진/미지원) — 다음 모델로 전환`, error)

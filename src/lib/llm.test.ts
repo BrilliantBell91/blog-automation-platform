@@ -821,5 +821,59 @@ describe("llm", () => {
       expect(result).toContain("첫 번째 이야기입니다")
       expect(result).not.toContain("[사진 원본") // 검색 실패한 이미지는 삽입되지 않음
     })
+
+    it("leadImageUrl로 지정한 첨부 사진(외관 사진)은 첫 번째 후보 문단에 강제 배치된다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+      })
+
+      const result = await generateNaverDraft(
+        {
+          ...mockPost,
+          contentAttachments: [
+            { kind: "image", url: "https://s3.example.com/exterior.jpg", label: "가게 외관" },
+          ],
+        },
+        undefined,
+        "https://s3.example.com/exterior.jpg"
+      )
+
+      const markerIndex = result.indexOf(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://s3.example.com/exterior.jpg]"
+      )
+      const secondParagraphIndex = result.indexOf("두 번째 이야기입니다")
+
+      expect(markerIndex).toBeGreaterThan(-1)
+      expect(markerIndex).toBeLessThan(secondParagraphIndex) // 첫 번째 후보 문단(=두 번째 문단) 뒤에 붙음
+    })
+
+    it("첨부 사진은 위치 순서가 아니라 캡션 키워드가 겹치는 문단에 매칭된다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n우니초밥을 먼저 맛봤는데 신선하고 고소했다.\n\n디저트로 나온 티라미수도 인상 깊었다.\n\n마무리 인사.",
+      })
+
+      // 첨부 순서는 티라미수 → 우니초밥 이지만(=위치 기반이면 첫 자리는 우니초밥 문단을
+      // 차지해야 함), 실제로는 캡션 키워드가 겹치는 문단으로 각각 배치되어야 한다.
+      const result = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/tiramisu.jpg", label: "티라미수 디저트" },
+          { kind: "image", url: "https://s3.example.com/uni.jpg", label: "우니초밥 클로즈업" },
+        ],
+      })
+
+      const uniParagraphIndex = result.indexOf("우니초밥을 먼저")
+      const dessertParagraphIndex = result.indexOf("디저트로 나온")
+      const uniMarkerIndex = result.indexOf("https://s3.example.com/uni.jpg")
+      const tiramisuMarkerIndex = result.indexOf("https://s3.example.com/tiramisu.jpg")
+
+      // 우니초밥 사진 마커는 우니초밥 문단과 디저트 문단 사이에 위치해야 한다
+      expect(uniMarkerIndex).toBeGreaterThan(uniParagraphIndex)
+      expect(uniMarkerIndex).toBeLessThan(dessertParagraphIndex)
+      // 티라미수 사진 마커는 디저트 문단 뒤에 위치해야 한다
+      expect(tiramisuMarkerIndex).toBeGreaterThan(dessertParagraphIndex)
+    })
   })
 })
