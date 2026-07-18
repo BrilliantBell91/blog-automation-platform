@@ -41,9 +41,17 @@ export default async function DraftBlogPreviewPage({ params }: DraftPreviewPageP
         초안 대시보드로
       </Link>
 
-      <p className="text-sm text-muted-foreground">
-        네이버 블로그 화면 미리보기 · {post.title}
-      </p>
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-sm text-muted-foreground">
+          네이버 블로그 화면 미리보기 · {post.title}
+        </p>
+        <Link
+          href={`/admin/uploads/${post.id}`}
+          className="shrink-0 text-sm text-muted-foreground hover:underline"
+        >
+          사진 업로드
+        </Link>
+      </div>
 
       {draft ? (
         <>

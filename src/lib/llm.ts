@@ -6,6 +6,7 @@ import {
   type IllustrativeImageStyle,
 } from "./imageGen"
 import { searchRealImages, searchGoogleImages } from "./imageSearch"
+import { describeImage, embedTexts, matchImagesToParagraphs } from "./imageMatching"
 import { searchNaverPlace } from "./naverLocalSearch"
 import { extractNaverPlaceId, fetchNaverPlaceDetail, fetchNaverPlacePhotos } from "./naverPlaceDetail"
 import { extractLinkLabel } from "./naverDraftParser"
@@ -47,52 +48,83 @@ const CATEGORY_STYLE_NOTES: Record<
     aiImageCount: 2,
     imagesPerParagraphs: 3,
     allowAiFallback: true,
-    notes: `- 혼인신고, 웨딩홀 비교 등 절차/정보 안내형 글이 많은 카테고리입니다.
-- 소제목은 반드시 그 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙여서 표시하세요. \`<blockquote>\`, \`</blockquote>\` 같은 HTML 태그는 절대 쓰지 마세요.
-- 소제목 줄 바로 다음에는 반드시 빈 줄을 넣어서 소제목과 본문 내용이 서로 다른 문단이 되게 하세요(같은 문단에 이어 쓰지 마세요).
-- 단계는 번호 목록(1. 2. 3.)으로 정리하세요.
-- 놓치면 안 되는 정보는 **볼드**로 강조하세요.
-- 마무리에 개인적인 소감 1~2문장을 자연스럽게 덧붙이세요.`,
+    notes: `- 이 카테고리는 실제로는 단일 톤이 아니라 아래 세 갈래로 뚜렷이 나뉩니다(실제 글 9편 전수 분석 결과). 글의 성격에 맞는 갈래를 판단해서 그 형식을 따르세요.
+  (1) 정보/절차 안내형(혼인신고, 예산 등 how-to): 개인 서사가 거의 없는 순수 정보 글.
+  (2) 업체 후기+실용정보 혼합형(웨딩홀 투어, 스드메 업체 후기 등): 스펙 정보 + 선택 이유를 개인 후기 톤으로.
+  (3) 스토리텔링/일기형(프로포즈, 연애 에피소드 등): 절차 정보 없이 대화체 서사 위주.
+- 서두는 "안녕하세요, 아기부리새예요.🙌"로 시작해 주제 한 문장 뒤 "...기록 시작하겠습니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧"로 이어지는 고정 인사말을 그대로(또는 거의 그대로) 재현하세요.
+- 정보/절차형(1)은: 소제목을 그 줄 맨 앞에 "> "만 붙여 표시하고(\`<blockquote>\` 같은 HTML 태그는 쓰지 마세요), 소제목 다음 줄은 반드시 빈 줄로 분리한 뒤 단계를 번호 목록(1. 2. 3.)으로 정리하세요. 놓치면 안 되는 정보는 **볼드**로 강조하세요.
+- 업체 후기형(2)은: 스펙 정보를 대시(-) 목록으로 나열한 뒤("-위치 : ... / -주차 : ... / -전화번호 : ..." 형식), 이어서 "선택 이유"를 별도로 번호 목록화하세요(예: "1. 위치 : ... 2. 식사 : ... 3. 주차 : ...").
+- 마무리는 "[날짜] 아기부리새와/가 쀼찬~ [주제] 기록 총총" 형식의 짧은 종결구로 끝내세요(정보형 단독 글은 "총총" 대신 "👋다들 행복한 [상황]하시길 바라요.👋" 같은 직접 인사도 가능).
+- 문장은 서두만 존댓말이고 본문은 반말/음슴체로 자연스럽게 전환되는 혼합체를 쓰세요. "ㅋㅋㅋ" 웃음 표현과 "!", "~"를 자주 섞고, 민망함/사과 표현엔 "„• ֊ •„)੭" 같은 카오모지를 쓰세요.
+- 해시태그는 갈래별로 다르게: 정보형은 동일 어근에 접미어만 바꾼 롱테일 태그를 10개 이상도 가능("#혼인신고 #혼인신고하는법 #혼인신고준비물 ..."), 업체 후기형은 "#업체명 #지역업체명 #카테고리추천" 조합 3~7개, 서사형은 2~4개로 간결하게.`,
   },
   육아: {
     naverCategoryLabel: "아가야 안녕(•ө•)♡",
     aiImageCount: 2,
     imagesPerParagraphs: 3,
     allowAiFallback: true,
-    notes: `- 육아휴직/출산휴가 신청 같은 절차·서류 안내형 글이 많은 카테고리입니다.
-- 소제목은 반드시 그 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙여서 표시하세요. \`<blockquote>\`, \`</blockquote>\` 같은 HTML 태그는 절대 쓰지 마세요.
-- 소제목 줄 바로 다음에는 반드시 빈 줄을 넣어서 소제목과 본문 내용이 서로 다른 문단이 되게 하세요(같은 문단에 이어 쓰지 마세요).
-- 단계는 번호 목록으로 정리하세요.
-- 중요한 서류/조건/기한은 **볼드**로 강조하세요.`,
+    notes: `- 실제 이 카테고리 글은 전부(2편 전수 확인) 육아휴직/출산휴가 신청 같은 절차·서류 안내형입니다. 성장기록·이유식·용품 후기 톤이 아니라 아래처럼 "정보 메모" 톤으로 쓰세요.
+- 서두는 "안녕하세요, 아기부리새예요.🙌"로 시작해서 "[주제] 지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧"로 이어지는 고정 인사말을 그대로(또는 거의 그대로) 재현하세요. 다른 카테고리처럼 "기록"이 아니라 "[신청방법 등 주제] 지금 바로 시작합니닷"으로 자연스럽게 변형하세요.
+- 서두 직후 핵심 일정/조건을 인용구(각 줄 맨 앞에 "> ")로 요약하세요(예: "출산예정일 : ...", "육아휴직일정 : ..."). \`<blockquote>\` 같은 HTML 태그는 쓰지 마세요.
+- 본문은 번호 매긴 절차 목록(1. 2. 3.)으로 전개하고, 화면의 버튼/메뉴명은 대괄호로 표시하세요(예: "1. [고용24] 홈페이지 접속 2. 좌측 상단 [기업] 클릭"). 소제목이 있다면 줄 다음에 반드시 빈 줄을 넣어 본문과 분리하세요.
+- 놓치면 안 되는 조건/기한/주의사항은 **볼드**로 강조하세요(예: "**휴가 시작일 다음 날부터 등록 가능**").
+- 본문 절차 설명 문장은 감성적 구어체가 아니라 메모·체크리스트형 축약 종결("~함.", "~됨.", "~줌.")을 쓰세요. 예: "유선으로 상세한 상담 및 카톡으로 신청 방법 및 순서 보내줌.", "예시로 본인 육아휴직 기간 넣음."
+- 마무리는 "총총"을 쓰지 말고, 이 카테고리 전용 클로징을 쓰세요: 주제에 맞는 응원 한 문장 + "👋다들 [상황에 맞는 문구] 보내세요.👋" (예: "그럼 자신이 모든 걸 처리해야 하는 워킹맘들을 응원하며 글 마무리하겠습니다. 👋다들 아기와 함께 하는 힘찬 하루 보내세요.👋")
+- 해시태그는 감성 태그가 아니라 핵심 키워드에 "대상(회사/사업주/직원/개인)"과 "행위(신청/신고/지급/부담)"를 조합한 SEO 키워드 순열로 10개 이상 구성하세요(예: "#육아휴직 #육아휴직신청방법 #육아휴직회사신청 #육아휴직사업주신청방법 #육아휴직직원신청").`,
   },
   나들이: {
     naverCategoryLabel: "나들이일지(˘▾˘)~",
     aiImageCount: 4,
-    imagesPerParagraphs: 3,
+    imagesPerParagraphs: 2,
     allowAiFallback: false,
-    notes: `- 방문한 장소(숙소, 시설, 여행지 등) 후기 글입니다.
-- 글 상단에 주소/전화/영업시간/주차 등 기본 정보를 정리하세요. 각 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙이면 되고, \`<blockquote>\` 같은 HTML 태그는 쓰지 마세요.
-- 이후 사진 위치마다 한두 문장씩 짧고 구어체로 코멘트하세요(예: "~있다", "~함", "~인 듯").
-- 마무리에 총평을 쓰고, 참고링크(지도 등) 마커가 있다면 위 "위치 링크 유지 규칙"에 따라 위치 안내로 그대로 남기세요.`,
+    notes: `- 방문한 장소(숙소, 시설, 여행지, 액티비티, 공연, 체험 등) 후기 글입니다. 아래는 이 카테고리 실제 글 20편을 전수 분석해 확인한 패턴입니다. 맛집과 서두·인용구·지도 마무리 뼈대는 같지만, 장소 유형에 따라 세부가 달라지니 글 내용에 맞는 유형을 판단해서 적용하세요.
+- 서두는 "안녕하세요, 아기부리새예요.🙌" + 훅 한 줄 + "지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧"로 이어지는 고정 인사말을 그대로(또는 거의 그대로) 재현하세요.
+- 상단 정보 인용구(각 줄 맨 앞에 "> ", \`<blockquote>\` 금지)는 장소 유형에 맞는 항목으로 구성하세요("확인된 매장 정보"에 실제로 주어진 항목만 쓰고 없는 항목은 지어내지 마세요):
+  - 시설/액티비티(클라이밍, 뷰티샵 등): 주소/전화/영업시간/주차/화장실
+  - 숙소: 주소/전화/주차/체크인/체크아웃/메모
+  - 사우나·찜질방: 주소/전화/영업시간/주차장/요금
+  - 무료 야외 명소: 주소/전화/주차/화장실(영업시간은 생략 가능)
+  - 체험: 주소/전화/금액/할인/메모
+  - 콘서트 등 공연: 정보 인용구 대신 "필수 준비물 : ... / 선택 : ... / 비추 : ..." 형식의 준비물 리스트를 쓰세요.
+- 본문 소제목은 "메뉴판 ▼" 대신 장소에 맞게 바꾸세요(예: "이용권 및 음료 안내 ▼", "요금표 ▼", "정규 강습 시간 안내 ▼"). 사진 위치마다 한두 문장씩(최대 3문장) 짧고 구어체로 코멘트하세요(예: "~있다", "~함", "~인 듯"). 여행 코스처럼 하루/이틀을 통째로 기록하는 글은 자연스럽게 길어질 수 있습니다.
+- 정보성이 약한 글(콘서트, 체험 등)에는 "정보 전달이 아니라 일기장이라고 생각해줘요" 같은 디스클레이머 문구를 자연스럽게 넣어도 됩니다.
+- 마무리는 두 갈래입니다: (1) 숙소·명소형은 "위치는 여기/요기 ▼" + 지도 마커 뒤 바로 "[날짜] ... 기록 총총"으로 끝내고 별도 작별인사는 생략 가능합니다. (2) 활동형(사우나·클라이밍·체험 등)은 지도 마커 뒤에 "글이 도움이 되었다 싶으시면 공감이랑 댓글 부탁드립니당." 같은 CTA와 함께 활동에 맞는 형용사를 넣은 "👋그럼 다들 [활동에 맞는 표현] 하루 보내세요.👋"로 마무리하세요. 어느 쪽이든 지도가 총평보다 먼저 오면 안 됩니다.
+- 해시태그는 "장소명+지역명+업종+추천/명소/가볼만한곳" 조합을 기본으로, 매장형은 6개 내외, 명소·사우나는 10~12개까지 SEO 롱테일(예: "~실시간", "~시기")을 붙이세요.`,
   },
   맛집: {
     naverCategoryLabel: "욤뇸뇸일지(˘༥˘ )",
     aiImageCount: 4,
-    imagesPerParagraphs: 3,
+    imagesPerParagraphs: 2,
     allowAiFallback: false,
-    notes: `- 방문한 맛집/카페 후기 글입니다.
-- 글 상단에 주소/전화/영업시간/주차 등 기본 정보를 정리하세요. 각 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙이면 되고, \`<blockquote>\` 같은 HTML 태그는 쓰지 마세요.
-- 이후 사진 위치마다 한두 문장씩 짧고 구어체로 음식/분위기를 코멘트하세요.
-- 마무리에 총평을 쓰고, 참고링크(지도 등) 마커가 있다면 위 "위치 링크 유지 규칙"에 따라 위치 안내로 그대로 남기세요.`,
+    notes: `- 방문한 맛집/카페 후기 글입니다. 아래는 이 카테고리 실제 글 56개를 전수 분석해 확인한 고정 패턴이니 최대한 그대로 따르세요.
+- 서두는 거의 항상 "안녕하세요, 아기부리새예요.🙌" 로 시작해서 가게 특징을 담은 짧은 훅 한 줄을 붙이고, "지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧" 로 이어집니다. 이 인사말과 카오모지를 그대로(또는 거의 그대로) 재현하세요.
+- 그다음 매장 정보를 인용구(각 줄 맨 앞에 "> ")로 정리하되, 실제로 확인된 항목만 반드시 "주소 / 전화 / 영업시간 / 주차 / 화장실" 순서로 넣으세요(없는 항목은 생략 — 지어내지 마세요, \`<blockquote>\` 같은 HTML 태그는 쓰지 마세요). 실제 형식 예시:
+  > 주소 : 광주 남구 노대실로34번길 14
+  > 전화 : 062-652-9265
+  > 영업시간
+  > -월-토 11:00-22:00
+  > -정기 휴무 매주 일요일
+  > 주차 : X (가게 앞 길가에 주차 가능한듯)
+  > 화장실 : 남여 공용, 내부에 위치
+- 본문은 "메뉴판 ▼" 소제목 → "매장 내부 ▼" 소제목(외관/인테리어 사진 자리) → 음식·음료 사진별 코멘트(사진 한 자리당 1~2문장, 최대 3문장) 순서로 전개하세요. 소제목은 그 줄에 짧게 쓰고 별도 문단으로 분리하세요.
+- 마무리는 반드시 이 순서를 지키세요: (1) 총평 2~4문장 → (2) "위치는 요기 ▼" 한 줄 다음에 참고링크(지도) 마커를 그대로 남기기(위 "위치 링크 유지 규칙" 참고) → (3) "👋그럼 다들 [맛있는/즐거운/평화로운] 하루 보내세요.👋" 같은 짧은 인사. 지도가 총평보다 먼저 오면 안 됩니다. "공감/댓글 부탁드립니다" 같은 CTA 문구는 최근 글에는 없으니 쓰지 마세요.
+- 문장 종결은 "~다."뿐 아니라 "~음."(명사형 캐주얼 종결, 예: "고기가 엄청 부드러움."), "~인 듯/듯."(추측형)을 자주 섞고, 가끔 "..ㅋㅋㅋ"로 얼버무리듯 끝내거나 "~당"(애교체, 예: "깜빡했당🙄")을 쓰세요.
+- 해시태그는 6~10개: "#상호명" 1~2개 + "#지역+맛집/카페/이자카야" 조합 여러 개 + "#지역+상호명" 결합형 + 대표 메뉴/특징 태그 1~2개로 구성하세요.
+- 실제 글 발췌(말투·구성 참고용, 내용은 무시):
+  > 안녕하세요, 아기부리새예요.🙌 소주 세 병 순삭, 조봉순상무국밥 노대점 지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧ (...) 국밥 첫 입 먹고 "오~"하고 곱창 한 입 먹고 두 눈 똥그랗게 떠서 서로를 바라본..ㅋㅋㅋ 쀼찬이랑 먹는 내내 "맛있다~ 맛있다~🤤"하며 너무너무너무x5 만족스럽게 먹고 나왔다. 광주가면 다음에 꼭! 또! 가야지. 👋그럼 다들 맛있는 하루 보내세요.👋
+  > 여기는... 정말 맛있다. 친한 친구들과는 여기서 청첩장 모임을 했다. 여기는 1차로 가면 안된다. 아니야, 1차로 가야 한다. 👋그럼 다들 맛있는 하루 보내세요.👋`,
   },
   기타: {
     naverCategoryLabel: "일상/꿀팁일지(ᐢ ̫ᐢ)",
     aiImageCount: 2,
     imagesPerParagraphs: 3,
     allowAiFallback: true,
-    notes: `- 일상 공유, 정보/꿀팁, 이벤트·혜택 공유 등 다양한 글이 섞여 있는 카테고리입니다.
-- 이벤트/혜택 공유 글이면 "~공유드립니닷", "신청ㄱㄱ!" 같은 캐주얼한 독려 문구와 링크를 자연스럽게 넣어도 됩니다.
-- 정보/팁 글이면 결혼·육아 카테고리처럼 소제목과 번호 목록으로 정리하세요. 소제목은 줄 맨 앞에 "> " (꺾쇠 기호 + 공백)만 붙이고, \`<blockquote>\` 같은 HTML 태그는 쓰지 마세요. 소제목 줄 다음에는 반드시 빈 줄을 넣어 본문과 다른 문단으로 분리하세요.`,
+    notes: `- 실제 이 카테고리 글 14편을 전수 분석한 결과, 순수 일상 잡담글은 없고 "이벤트/혜택 공유형"과 "정보/꿀팁형" 두 갈래로만 나뉩니다. 글 내용에 맞는 쪽을 판단해서 적용하세요.
+- 서두는 "안녕하세요, 아기부리새예요.🙌"로 시작하는 고정 인사말을 재현하되, 이벤트형은 "[브랜드/상품명] 이벤트 지금 바로 공유드립니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧", 정보/꿀팁형은 "[주제] 지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧"로 이어가세요.
+- 이벤트/혜택 공유형은 인사말 직후 다음 문구를 (거의 토씨 그대로) 넣으세요: "추첨 형식이라 100% 받는건 아니지만 받으면 좋으니까 아래 이벤트 내용 보고 괜찮다 싶으면 신청ㄱㄱ! SNS 공유가 필수는 아니지만 이벤트 공유 시 당첨 확률 올라감". 이후 상품에 대한 짧은 감상(1~2문장)만 곁들이고 본문을 길게 늘리지 마세요(실제 글도 150~500자로 짧습니다). 마무리는 "총총" 없이 바로 "👋그럼 다들 좋은 소식있는 하루 보내세요.👋" 같은 인사로 끝내세요.
+- 정보/꿀팁형은 소제목 없이 바로 번호 목록(1. 2. 3...)으로 절차를 서술하고, 필요하면 단계 뒤에 "Tip : ..." 부연 설명을 붙이세요. 결혼/육아처럼 인용구 소제목을 따로 쓰지 않습니다. 마무리는 "공감이랑 댓글 부탁드립니당." + "👋그럼 다들 [주제에 맞는 문구] 보세요.👋" + "[주제] 총총" 순서로 끝내세요.
+- 해시태그는 감성 태그 없이 브랜드명/주제어를 변주한 롱테일로 구성하세요(이벤트형 4~5개, 이벤트 모음형은 브랜드당 2~3개씩 20개 이상도 가능, 정보/꿀팁형 6~7개).`,
   },
 }
 
@@ -132,7 +164,7 @@ function buildSystemPrompt(styleGuide?: string, category?: string): string {
 
 ## 구성
 1. 서두: 1~2문장으로 글의 핵심 인상
-2. 본문: 짧은 문단 위주로 구성 (사진별 설명이 있다면 장소→분위기→내용 순)
+2. 본문: 짧은 문단 위주로 구성 (사진별 설명이 있다면 장소→분위기→내용 순). **각 문단은 1~3문장 이내로 짧게 끊어 쓰세요.** 한 문단이 4문장 이상 길어지면 안 됩니다 — 사진 자리 하나마다 코멘트가 방대해지는 것을 막기 위함입니다.
 3. 마무리: 추천 또는 아쉬운 점, 배운 점
 
 ## 해시태그 (중요)
@@ -284,12 +316,17 @@ function getVisualParagraphCandidates(paragraphs: string[]): number[] {
 }
 
 // 이미지 슬롯을 삽입할 문단 위치를 고른다. 후보 문단 중 균등한 간격으로 count개를 고른다.
+// 후보가 count보다 적으면(짧은 글) 후보를 순환시켜서라도 정확히 count개를 반환한다 —
+// 그렇지 않으면 호출부(insertImages)에서 뒤쪽 이미지(주로 사용자 첨부 사진)가 배정받을
+// 자리 자체가 없어 조용히 누락되는 사고가 있었다(실측 확인됨). 같은 문단에 마커가 여러 개
+// 붙는 것은 insertImages의 문자열 이어붙이기 특성상 안전하게 처리된다.
 function selectImageInsertionPoints(candidates: number[], count: number): number[] {
   if (candidates.length === 0 || count <= 0) return []
-  if (candidates.length <= count) return candidates
-
-  const step = candidates.length / count
-  return Array.from({ length: count }, (_, k) => candidates[Math.floor(k * step)])
+  if (candidates.length >= count) {
+    const step = candidates.length / count
+    return Array.from({ length: count }, (_, k) => candidates[Math.floor(k * step)])
+  }
+  return Array.from({ length: count }, (_, k) => candidates[k % candidates.length])
 }
 
 // Notion 제목에 흔히 붙는 "[테스트]", "[협찬]" 같은 대괄호 접두사는 이미지 검색 관련성을
@@ -489,6 +526,37 @@ async function resolveShortfallImages(
   return results
 }
 
+// 문단이 지나치게 길면(예: LLM이 "1~3문장" 규칙을 어기고 한 문단에 여러 문장을 몰아쓴
+// 경우) 이미지 슬롯 후보 밀도가 낮아져 사진 사이 텍스트가 방대해진다. 마침표/느낌표/물음표
+// 뒤에서 문장을 나눠 maxLength를 넘지 않는 선까지만 다시 묶어, 프롬프트 준수 여부와
+// 무관하게 candidate 밀도를 강제로 높인다. 인용구/해시태그/마커 문단은 건드리지 않는다.
+function splitLongParagraphs(paragraphs: string[], maxLength = 200): string[] {
+  const result: string[] = []
+  for (const paragraph of paragraphs) {
+    if (
+      paragraph.length <= maxLength ||
+      paragraph.startsWith(">") ||
+      paragraph.startsWith("#") ||
+      MARKER_PARAGRAPH.test(paragraph)
+    ) {
+      result.push(paragraph)
+      continue
+    }
+    const sentences = paragraph.split(/(?<=[.!?])\s+/)
+    let chunk = ""
+    for (const sentence of sentences) {
+      if (chunk && chunk.length + sentence.length + 1 > maxLength) {
+        result.push(chunk)
+        chunk = sentence
+      } else {
+        chunk = chunk ? `${chunk} ${sentence}` : sentence
+      }
+    }
+    if (chunk) result.push(chunk)
+  }
+  return result
+}
+
 // 사용자 첨부 사진과 부족분(실사 검색/AI 생성)을 모두 서술형 문단 사이사이에 프로그래밍적으로
 // 끼워넣는다. 첨부 사진의 URL은 LLM에게 애초에 주지 않으므로(위 formatImageAttachmentHints
 // 참고) 여기서 코드가 직접 삽입해야 실제로 첨부한 사진이 결과에 반드시 포함된다.
@@ -500,7 +568,7 @@ async function insertImages(text: string, apiKey: string, post: Post): Promise<s
   const entry = post.category ? CATEGORY_STYLE_NOTES[post.category] : undefined
   const allowAiFallback = entry?.allowAiFallback ?? DEFAULT_ALLOW_AI_FALLBACK
 
-  const paragraphs = text.split("\n\n")
+  const paragraphs = splitLongParagraphs(text.split("\n\n"))
   const candidates = getVisualParagraphCandidates(paragraphs)
 
   // 이미지 목표 개수를 "카테고리 최소값" 또는 "글 길이 기반값" 중 더 큰 값으로 결정
@@ -521,7 +589,8 @@ async function insertImages(text: string, apiKey: string, post: Post): Promise<s
   )
   const placeId = mapLink ? extractNaverPlaceId(mapLink.url) : null
 
-  // 앞쪽 자리는 사용자 첨부 사진, 나머지 자리만 검색/생성으로 채운다.
+  // 뒤쪽 자리(부족분)는 검색/생성으로 채운다 — 검색어/생성 프롬프트 자체가 그 문단
+  // 텍스트를 기반으로 하므로 이미 내용상 매칭되어 있다.
   const shortfallPoints = points.slice(attachments.length)
   const shortfallImages =
     shortfallPoints.length > 0
@@ -536,21 +605,46 @@ async function insertImages(text: string, apiKey: string, post: Post): Promise<s
         )
       : []
 
-  // 첨부 사진의 캡션으로 Notion 파일명(예: "20180206_195520.jpg")이 그대로 화면에 노출되던
-  // 문제가 있어, 마커에는 캡션을 붙이지 않는다(파일명은 의미 있는 설명이 아니므로).
-  const images: (string | null)[] = [
-    ...attachments.map((a) => a.url),
-    ...shortfallImages,
-  ]
-
   const result = [...paragraphs]
   // 배열에 새 원소를 끼워넣는 대신 대상 문단 뒤에 마커를 이어붙이므로 인덱스가 밀리지 않는다.
-  points.forEach((pointIndex, k) => {
-    const imageUrl = images[k]
-    if (!imageUrl) return
-    result[pointIndex] =
-      result[pointIndex] +
+  // 같은 문단에 마커가 여러 개 이어붙는 것도 안전하게 처리된다(비슷한 사진끼리 묶이는 효과).
+  const appendImageMarker = (paragraphIndex: number, imageUrl: string) => {
+    result[paragraphIndex] =
+      result[paragraphIndex] +
       `\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${imageUrl}]`
+  }
+
+  // 앞쪽 자리(사용자 첨부 사진)는 위치 순서가 아니라 사진 내용과 문단 내용의 의미적
+  // 유사도로 배치한다 — 균등 간격 배치는 "우니초밥을 얘기하는 문단에 엉뚱한 사진이
+  // 붙는" 사고의 원인이었다. 비슷한 캡션의 사진들은 같은 문단으로 몰려 자연히
+  // 인접 배치(그룹핑)된다. 캡션/임베딩 호출이 실패해도(매칭 불가) 첨부 사진은
+  // 반드시 결과에 포함해야 하므로(전부 포함 불변식), 균등 배치로 골라둔 points를
+  // 폴백 위치로 쓴다.
+  if (attachments.length > 0) {
+    const captions = await Promise.all(
+      attachments.map((a) => describeImage(apiKey, a.url, a.label))
+    )
+    const candidateParagraphTexts = candidates.map((i) => paragraphs[i])
+    const [imageEmbeddings, paragraphEmbeddings] = await Promise.all([
+      embedTexts(apiKey, captions),
+      embedTexts(apiKey, candidateParagraphTexts),
+    ])
+
+    const matchedIndexes = matchImagesToParagraphs(
+      imageEmbeddings.map((embedding) => ({ embedding })),
+      candidates.map((index, i) => ({ index, embedding: paragraphEmbeddings[i] ?? [] }))
+    )
+
+    attachments.forEach((attachment, i) => {
+      const paragraphIndex = matchedIndexes[i] ?? points[i % points.length]
+      appendImageMarker(paragraphIndex, attachment.url)
+    })
+  }
+
+  shortfallPoints.forEach((pointIndex, k) => {
+    const imageUrl = shortfallImages[k]
+    if (!imageUrl) return
+    appendImageMarker(pointIndex, imageUrl)
   })
 
   return result.join("\n\n")

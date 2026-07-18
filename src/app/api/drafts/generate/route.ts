@@ -6,6 +6,7 @@ import { getCachedPostById } from "@/lib/postsCache"
 import { invalidatePostCache } from "@/lib/postsCache"
 import { upsertLocalPost } from "@/lib/posts"
 import { generateNaverDraft } from "@/lib/llm"
+import { resolveThumbnailUrl } from "@/lib/thumbnail"
 import { db } from "@/lib/db"
 import type { GenerateDraftResponse } from "@/types/api"
 import type { DraftStatus } from "@/types"
@@ -48,6 +49,12 @@ export async function POST(request: NextRequest) {
         { error: "Notion에서 포스트를 찾을 수 없습니다." },
         { status: 404 }
       )
+    }
+
+    // 대표 사진(썸네일)을 외관 사진 우선으로 재선정 (실패하면 기존 imageUrl 유지)
+    const thumbnailUrl = await resolveThumbnailUrl(process.env.LLM_API_KEY ?? "", notionPost)
+    if (thumbnailUrl) {
+      notionPost.imageUrl = thumbnailUrl
     }
 
     // 로컬 Post 테이블에 upsert
