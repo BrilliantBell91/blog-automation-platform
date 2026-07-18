@@ -10,28 +10,86 @@
 // 전락해 "매칭이 전혀 안 된다"는 사고로 이어지므로, 추가 API 의존 없이 이미 확보한
 // 캡션 텍스트만으로 항상 동작하는 방식을 택했다.
 
-import { runVisionPrompt } from "./imageGen"
+import { runVisionPromptBatch } from "./imageGen"
 
-const CAPTION_PROMPT = `이 사진의 핵심 피사체를 2~4개의 짧은 한국어 키워드로 나열해주세요(쉼표로 구분).
-예: "우니, 초밥, 클로즈업" 또는 "가게, 외관, 간판" 또는 "라떼, 커피잔".
-문장이 아니라 키워드만 쉼표로 구분해서, 다른 설명 없이 답하세요.`
+export interface ImageAnalysis {
+  caption: string
+  isExterior: boolean
+}
 
 // Notion 첨부 사진의 label은 대개 원본 파일명("20180206_195520.jpg" 등)이라 의미가
 // 없다. 이런 경우만 비전 호출로 새로 캡션을 만들고, 사람이 실제로 입력한 캡션(파일명
 // 패턴이 아닌 텍스트)이 있으면 비전 호출 없이 그대로 재사용해 시간/비용을 아낀다.
 const MEANINGLESS_LABEL_PATTERN = /^[\d_\-.\s]+\.(jpe?g|png|heic|webp|gif)$/i
 
-export async function describeImage(
-  apiKey: string,
-  imageUrl: string,
-  existingLabel?: string
-): Promise<string> {
-  const trimmedLabel = existingLabel?.trim()
-  if (trimmedLabel && !MEANINGLESS_LABEL_PATTERN.test(trimmedLabel)) {
-    return trimmedLabel
+// 라벨 텍스트만으로 외관 사진 여부를 저비용으로 추정한다(비전 호출 없음).
+const EXTERIOR_LABEL_HINT = /외관|간판|입구|정면|건물/
+
+const BATCH_SIZE = 5
+
+const BATCH_ANALYSIS_PROMPT = `아래 사진들을 순서대로 분석해서, 각 사진마다 한 줄씩 다음 형식으로만 답하세요:
+N) 키워드1, 키워드2 | 예 또는 아니오
+
+- 키워드: 그 사진의 핵심 피사체를 2~4개의 짧은 한국어 단어로 쉼표 구분해서 나열 (예: "우니, 초밥, 클로즈업")
+- 마지막 예/아니오: 그 사진이 가게/매장/장소의 외관(건물 정면, 간판이 보이는 입구, 외부 전경)이면 "예", 아니면 "아니오"
+- 사진 번호(N)는 반드시 실제 순서와 일치시키고, 다른 설명 없이 위 형식의 줄만 그대로 출력하세요.`
+
+function parseBatchAnalysis(text: string, count: number): (ImageAnalysis | null)[] {
+  const results: (ImageAnalysis | null)[] = Array.from({ length: count }, () => null)
+  const lineRegex = /^(\d+)\)\s*(.+?)\s*\|\s*(예|아니오)\s*$/gm
+  let match: RegExpExecArray | null
+  while ((match = lineRegex.exec(text)) !== null) {
+    const index = Number(match[1]) - 1
+    if (index < 0 || index >= count) continue
+    results[index] = {
+      caption: match[2].trim().slice(0, 60),
+      isExterior: match[3] === "예",
+    }
   }
-  const text = await runVisionPrompt(apiKey, imageUrl, CAPTION_PROMPT)
-  return text && text.length > 0 ? text.slice(0, 60) : ""
+  return results
+}
+
+// 첨부 사진 전부를 분석해 {caption, isExterior}를 반환한다(입력과 같은 순서).
+// 라벨이 의미 있으면(파일명 패턴 아님) 비전 호출 없이 그 라벨을 캡션으로 재사용하고,
+// 라벨 텍스트에 외관 관련 단어가 있으면 그것만으로 외관 여부를 판정한다. 나머지(라벨
+// 없음/의미 없음)만 여러 장씩 묶어 한 번의 비전 호출로 처리한다 — 캡션 생성과 외관 판별을
+// 사진마다 각각 개별 호출하던 이전 구조는 사진 장수에 비례해 호출이 늘어나 무료 티어
+// 일일 한도를 초안 하나로 소진시키는 사고가 실측으로 확인되어, 배치 호출로 재설계했다.
+// 파싱에 실패하거나 일부만 파싱된 사진은 {caption: "", isExterior: false}로 안전 폴백
+// 한다(배치 전체를 버리지 않음 — 호출부가 "매칭 불가"로 처리해 균등 배치 폴백을 쓴다).
+export async function analyzeImagesBatch(
+  apiKey: string,
+  images: { url: string; existingLabel?: string }[]
+): Promise<ImageAnalysis[]> {
+  const results: ImageAnalysis[] = images.map(() => ({ caption: "", isExterior: false }))
+  const needsVision: { originalIndex: number; url: string }[] = []
+
+  images.forEach((image, i) => {
+    const label = image.existingLabel?.trim()
+    if (label && !MEANINGLESS_LABEL_PATTERN.test(label)) {
+      results[i] = { caption: label, isExterior: EXTERIOR_LABEL_HINT.test(label) }
+    } else {
+      needsVision.push({ originalIndex: i, url: image.url })
+    }
+  })
+
+  for (let start = 0; start < needsVision.length; start += BATCH_SIZE) {
+    const batch = needsVision.slice(start, start + BATCH_SIZE)
+    const { successIndexes, text } = await runVisionPromptBatch(
+      apiKey,
+      batch.map((b) => b.url),
+      BATCH_ANALYSIS_PROMPT
+    )
+    if (!text) continue
+
+    const parsed = parseBatchAnalysis(text, successIndexes.length)
+    successIndexes.forEach((batchIndex, i) => {
+      const analysis = parsed[i]
+      if (analysis) results[batch[batchIndex].originalIndex] = analysis
+    })
+  }
+
+  return results
 }
 
 // 캡션을 토큰(키워드) 배열로 쪼갠다. 쉼표/공백/구두점 기준으로 나누고, 조사 등 노이즈가

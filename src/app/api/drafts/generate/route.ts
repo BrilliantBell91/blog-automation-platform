@@ -6,7 +6,6 @@ import { getCachedPostById } from "@/lib/postsCache"
 import { invalidatePostCache } from "@/lib/postsCache"
 import { upsertLocalPost } from "@/lib/posts"
 import { generateNaverDraft } from "@/lib/llm"
-import { resolveThumbnailUrl } from "@/lib/thumbnail"
 import { db } from "@/lib/db"
 import type { GenerateDraftResponse } from "@/types/api"
 import type { DraftStatus } from "@/types"
@@ -51,12 +50,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 대표 사진(썸네일)을 외관 사진 우선으로 재선정 (실패하면 기존 imageUrl 유지)
-    const thumbnailUrl = await resolveThumbnailUrl(process.env.LLM_API_KEY ?? "", notionPost)
-    if (thumbnailUrl) {
-      notionPost.imageUrl = thumbnailUrl
-    }
-
     // 로컬 Post 테이블에 upsert
     const localPost = await upsertLocalPost(notionPost)
 
@@ -65,11 +58,10 @@ export async function POST(request: NextRequest) {
       where: { id: session.user.id },
     })
 
-    // LLM으로 초안 생성 (외관 사진이 첨부 사진 중 하나라면 본문 최상단에 강제 배치)
-    const generatedContent = await generateNaverDraft(
+    // LLM으로 초안 생성 (외관 사진 판별·본문 최상단 배치까지 내부에서 자체 처리)
+    const { content: generatedContent, leadImageUrl } = await generateNaverDraft(
       notionPost,
-      user?.naverStyleGuide ?? undefined,
-      thumbnailUrl
+      user?.naverStyleGuide ?? undefined
     )
 
     // Draft upsert (기존 초안이 있으면 재생성)
@@ -86,10 +78,13 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    // Post의 naverDraftStatus도 동기화
+    // Post의 naverDraftStatus 동기화 + 초안 본문에 실제로 쓰인 대표 사진으로 카드 썸네일도 동기화
     await db.post.update({
       where: { id: localPost.id },
-      data: { naverDraftStatus: "생성됨" },
+      data: {
+        naverDraftStatus: "생성됨",
+        ...(leadImageUrl ? { imageUrl: leadImageUrl } : {}),
+      },
     })
 
     // Task 012: 초안 생성 성공 후 해당 포스트 상세 페이지 재검증

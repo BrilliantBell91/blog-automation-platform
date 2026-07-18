@@ -125,43 +125,18 @@ export const VERIFY_MODEL_FALLBACK_CHAIN = [
   "gemini-3-flash-preview",
 ] as const
 
-// 이미지+텍스트 프롬프트를 비전 모델에 보내고 원문 응답 텍스트를 반환하는 저수준 헬퍼.
-// verifyImageRelevance와 동일한 모델 폴백 체인·재시도 정책(모델당 1회, 실패 시 바로 다음
-// 모델)을 공유해, 외관 사진 판별(thumbnail.ts)이나 사진 캡션 생성(imageMatching.ts) 같은
-// 다른 비전 판별 작업에서 재사용한다. verifyImageRelevance 자체는 "다운로드 실패=irrelevant,
-// 모델 호출 전부 실패=unknown"이라는 세밀한 구분이 필요해 별도로 유지하고 이 헬퍼로
-// 대체하지 않는다.
-export async function runVisionPrompt(
-  apiKey: string,
-  imageUrl: string,
-  promptText: string
-): Promise<string | null> {
-  let mimeType: string
-  let base64: string
-  try {
-    const imageRes = await fetch(imageUrl)
-    if (!imageRes.ok) return null
-    mimeType = imageRes.headers.get("content-type") || "image/jpeg"
-    base64 = Buffer.from(await imageRes.arrayBuffer()).toString("base64")
-  } catch (error) {
-    console.warn("[imageGen] 비전 프롬프트용 이미지 다운로드 실패", error)
-    return null
-  }
+type VisionPart = { inlineData: { mimeType: string; data: string } } | { text: string }
 
+// 비전 모델 폴백 체인 호출의 공통 부분(모델 순회 + 재시도 정책)을 추출한 저수준 헬퍼.
+// runVisionPrompt/runVisionPromptBatch가 공유한다. verifyImageRelevance는 "다운로드
+// 실패=irrelevant, 모델 호출 전부 실패=unknown"이라는 세밀한 구분이 필요해 별도로 유지한다.
+async function callVisionModel(apiKey: string, parts: VisionPart[]): Promise<string | null> {
   const ai = new GoogleGenAI({ apiKey })
   for (const model of VERIFY_MODEL_FALLBACK_CHAIN) {
     try {
       const response = await ai.models.generateContent({
         model,
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { inlineData: { mimeType, data: base64 } },
-              { text: promptText },
-            ],
-          },
-        ],
+        contents: [{ role: "user", parts }],
       })
       return (response.text ?? "").trim()
     } catch (error) {
@@ -174,6 +149,58 @@ export async function runVisionPrompt(
   }
   console.warn("[imageGen] 비전 프롬프트 호출 - 모든 모델 할당량 소진")
   return null
+}
+
+async function fetchImageAsPart(imageUrl: string): Promise<VisionPart | null> {
+  try {
+    const imageRes = await fetch(imageUrl)
+    if (!imageRes.ok) return null
+    const mimeType = imageRes.headers.get("content-type") || "image/jpeg"
+    const data = Buffer.from(await imageRes.arrayBuffer()).toString("base64")
+    return { inlineData: { mimeType, data } }
+  } catch (error) {
+    console.warn("[imageGen] 비전 프롬프트용 이미지 다운로드 실패", error)
+    return null
+  }
+}
+
+// 이미지 1장+텍스트 프롬프트를 비전 모델에 보내고 원문 응답 텍스트를 반환하는 저수준 헬퍼.
+// 외관 사진 판별(thumbnail.ts)이나 사진 캡션 생성(imageMatching.ts) 같은 다른 비전 판별
+// 작업에서 재사용한다.
+export async function runVisionPrompt(
+  apiKey: string,
+  imageUrl: string,
+  promptText: string
+): Promise<string | null> {
+  const imagePart = await fetchImageAsPart(imageUrl)
+  if (!imagePart) return null
+  return callVisionModel(apiKey, [imagePart, { text: promptText }])
+}
+
+// 여러 이미지를 한 번의 비전 모델 호출로 묶어 보낸다(멀티 이미지 파트 지원은
+// verifyImageRelevance/runVisionPrompt에서 이미 검증된 패턴). 사진 장수만큼 호출이
+// 비례하는 것을 막기 위한 용도 — imageMatching.ts의 analyzeImagesBatch가 사용한다.
+// 다운로드에 실패한 이미지는 조용히 목록에서 제외하되, 프롬프트에서 번호와 실제 순서가
+// 어긋나지 않도록 호출부가 성공한 이미지의 원래 인덱스를 함께 추적해야 한다.
+export async function runVisionPromptBatch(
+  apiKey: string,
+  imageUrls: string[],
+  promptText: string
+): Promise<{ successIndexes: number[]; text: string | null }> {
+  const fetched = await Promise.all(imageUrls.map((url) => fetchImageAsPart(url)))
+  const successIndexes: number[] = []
+  const parts: VisionPart[] = []
+  fetched.forEach((part, i) => {
+    if (part) {
+      successIndexes.push(i)
+      parts.push(part)
+    }
+  })
+  if (parts.length === 0) return { successIndexes, text: null }
+
+  parts.push({ text: promptText })
+  const text = await callVisionModel(apiKey, parts)
+  return { successIndexes, text }
 }
 
 // "irrelevant"는 모델이 실제로 "무관하다/부적절하다"고 답한 경우, "unknown"은 검증

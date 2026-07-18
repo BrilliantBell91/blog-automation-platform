@@ -128,7 +128,7 @@ describe("llm", () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
 
-      const result = await generateNaverDraft(mockPost)
+      const { content: result } = await generateNaverDraft(mockPost)
 
       expect(result).toBe("생성된 초안 내용")
       expect(generateContentMock).toHaveBeenCalledTimes(1)
@@ -292,7 +292,7 @@ describe("llm", () => {
         ],
       })
 
-      const result = await generateNaverDraft(mockPost)
+      const { content: result } = await generateNaverDraft(mockPost)
 
       expect(result).toBe("생성된 초안 내용")
     })
@@ -368,7 +368,7 @@ describe("llm", () => {
 
       const promise = generateNaverDraft(mockPost)
       await vi.runAllTimersAsync()
-      const result = await promise
+      const { content: result } = await promise
 
       expect(result).toBe("재시도 후 생성된 초안")
       expect(generateContentMock).toHaveBeenCalledTimes(2)
@@ -388,7 +388,7 @@ describe("llm", () => {
 
       const promise = generateNaverDraft(mockPost)
       await vi.runAllTimersAsync()
-      const result = await promise
+      const { content: result } = await promise
 
       expect(result).toBe("두 번째 모델이 생성한 초안")
       // 첫 모델: 최초 시도 + 재시도 3회 = 4회, 두 번째 모델: 1회 = 총 5회
@@ -403,7 +403,7 @@ describe("llm", () => {
         .mockRejectedValueOnce(new ApiError({ message: "Not Found", status: 404 }))
         .mockResolvedValueOnce({ text: "두 번째 모델이 생성한 초안" })
 
-      const result = await generateNaverDraft(mockPost)
+      const { content: result } = await generateNaverDraft(mockPost)
 
       expect(result).toBe("두 번째 모델이 생성한 초안")
       // 404는 재시도하지 않으므로 첫 모델 1회 + 두 번째 모델 1회 = 총 2회
@@ -420,7 +420,7 @@ describe("llm", () => {
 
       const promise = generateNaverDraft(mockPost)
       await vi.runAllTimersAsync()
-      const result = await promise
+      const { content: result } = await promise
 
       expect(result).toBe("재시도 후 생성된 초안")
       expect(generateContentMock).toHaveBeenCalledTimes(2)
@@ -440,7 +440,7 @@ describe("llm", () => {
 
       const promise = generateNaverDraft(mockPost)
       await vi.runAllTimersAsync()
-      const result = await promise
+      const { content: result } = await promise
 
       expect(result).toBe("두 번째 모델이 생성한 초안")
       expect(generateContentMock).toHaveBeenCalledTimes(5)
@@ -465,7 +465,7 @@ describe("llm", () => {
         })
 
       // category="기타" (allowAiFallback=true, aiImageCount=2) — 후보 문단이 2개뿐이라 둘 다 삽입 대상이 됨
-      const result = await generateNaverDraft({ ...mockPost, category: "기타" })
+      const { content: result } = await generateNaverDraft({ ...mockPost, category: "기타" })
 
       expect(result).toBe(
         "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n마무리 인사."
@@ -479,7 +479,7 @@ describe("llm", () => {
         text: "안녕하세요.\n\n첫 번째 문단 내용입니다 여기에는 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n두 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n세 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n네 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n마무리 인사.",
       })
 
-      const result = await generateNaverDraft({
+      const { content: result } = await generateNaverDraft({
         ...mockPost, // 맛집, aiImageCount 4
         contentAttachments: [
           { kind: "image", url: "https://example.com/1.jpg" },
@@ -501,8 +501,12 @@ describe("llm", () => {
       expect(result).toContain(
         "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://example.com/4.jpg]"
       )
-      expect(generateContentMock).toHaveBeenCalledTimes(1) // 텍스트 생성만, AI 이미지 생성 호출 없음
-      expect(searchRealImagesMock).not.toHaveBeenCalled() // 부족분이 없으니 검색도 하지 않음
+      // 텍스트 생성 1회만 — 캡션 배치 분석은 이미지 다운로드(fetch)가 테스트 환경에서
+      // 항상 실패하도록 mock되어 있어(fetchMock 기본값) 비전 모델 호출까지 가지 않고
+      // 조용히 빈 캡션으로 폴백한다(생성 자체가 실패한 게 아니라 안전하게 건너뛴 것).
+      expect(generateContentMock).toHaveBeenCalledTimes(1)
+      // 부족분 채우기 검색은 없지만, 외관 사진이 없어 대표 사진 검색은 한 번 시도한다
+      expect(searchRealImagesMock).toHaveBeenCalledWith("테스트 포스트 외관", 5)
     })
 
     it("첨부 사진에 label(Notion 파일명 등)이 있어도 마커에는 캡션을 붙이지 않는다(파일명 노출 방지)", async () => {
@@ -511,7 +515,7 @@ describe("llm", () => {
         text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
-      const result = await generateNaverDraft({
+      const { content: result } = await generateNaverDraft({
         ...mockPost,
         contentAttachments: [
           { kind: "image", url: "https://example.com/1.jpg", label: "20180206_195520.jpg" },
@@ -531,7 +535,7 @@ describe("llm", () => {
         text: "안녕하세요.\n\n첫 번째 문단 내용입니다 여기에는 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n두 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n마무리 인사.",
       })
 
-      const result = await generateNaverDraft({
+      const { content: result } = await generateNaverDraft({
         ...mockPost, // 맛집, aiImageCount 4 → 첨부 1장 + 부족분 3장 시도(문단 후보는 2개뿐)
         contentAttachments: [{ kind: "image", url: "https://example.com/attached.jpg" }],
       })
@@ -552,7 +556,7 @@ describe("llm", () => {
         })
         .mockRejectedValueOnce(new Error("이미지 생성 실패"))
 
-      const result = await generateNaverDraft(mockPost)
+      const { content: result } = await generateNaverDraft(mockPost)
 
       expect(result).toBe("안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.")
     })
@@ -567,7 +571,7 @@ describe("llm", () => {
       })
 
       // mockPost.category === "맛집" (allowAiFallback=false), tags === ["서울", "카페"]
-      const result = await generateNaverDraft(mockPost)
+      const { content: result } = await generateNaverDraft(mockPost)
 
       expect(result).toBe(
         "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real2.jpg]\n\n마무리 인사."
@@ -588,7 +592,7 @@ describe("llm", () => {
         text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
-      const result = await generateNaverDraft({
+      const { content: result } = await generateNaverDraft({
         ...mockPost,
         contentAttachments: [
           { kind: "link", url: "https://map.naver.com/p/search/잇키/place/1370160067" },
@@ -615,7 +619,7 @@ describe("llm", () => {
         text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
-      const result = await generateNaverDraft(mockPost)
+      const { content: result } = await generateNaverDraft(mockPost)
 
       // shared.jpg는 한 번만 삽입되고, 중복된 두 번째 선택은 비워진다.
       const occurrences = result.split("shared.jpg").length - 1
@@ -636,7 +640,7 @@ describe("llm", () => {
         text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
-      const result = await generateNaverDraft(mockPost)
+      const { content: result } = await generateNaverDraft(mockPost)
 
       expect(result).toContain(
         "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/related.jpg]"
@@ -667,7 +671,7 @@ describe("llm", () => {
           ],
         })
 
-      const result = await generateNaverDraft({ ...mockPost, category: "기타" })
+      const { content: result } = await generateNaverDraft({ ...mockPost, category: "기타" })
 
       expect(result).not.toContain("unverified.jpg")
       expect(result).toContain(
@@ -703,7 +707,7 @@ describe("llm", () => {
           ],
         })
 
-      const result = await generateNaverDraft({ ...mockPost, category: "기타" })
+      const { content: result } = await generateNaverDraft({ ...mockPost, category: "기타" })
 
       // 검증은 총 5회: search 결과 4개 + AI 생성 이미지 1회
       expect(verifyImageRelevanceMock).toHaveBeenCalledTimes(5)
@@ -733,7 +737,7 @@ describe("llm", () => {
           ],
         })
 
-      const result = await generateNaverDraft({ ...mockPost, category: "기타" })
+      const { content: result } = await generateNaverDraft({ ...mockPost, category: "기타" })
 
       // irrelevant가 아니라 unknown이므로 재생성하지 않고 첫 시도 결과를 그대로 채택
       expect(generateContentMock).toHaveBeenCalledTimes(3)
@@ -772,7 +776,7 @@ describe("llm", () => {
           ],
         })
 
-      const result = await generateNaverDraft({ ...mockPost, category: "기타" })
+      const { content: result } = await generateNaverDraft({ ...mockPost, category: "기타" })
 
       expect(result).toBe(
         "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n마무리 인사."
@@ -813,7 +817,7 @@ describe("llm", () => {
         text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
-      const result = await generateNaverDraft(mockPost) // category="맛집" (allowAiFallback=false)
+      const { content: result } = await generateNaverDraft(mockPost) // category="맛집" (allowAiFallback=false)
 
       // 첫 슬롯은 검색 실패로 비워짐, 두 번째 슬롯만 삽입 시도 (generateContentMock은 텍스트 생성 1회만)
       expect(generateContentMock).toHaveBeenCalledTimes(1) // AI 이미지 생성 없음
@@ -822,28 +826,27 @@ describe("llm", () => {
       expect(result).not.toContain("[사진 원본") // 검색 실패한 이미지는 삽입되지 않음
     })
 
-    it("leadImageUrl로 지정한 첨부 사진(외관 사진)은 첫 번째 후보 문단에 강제 배치된다", async () => {
+    it("라벨에 외관이 명시된 첨부 사진은 첫 번째 후보 문단에 강제 배치되고 leadImageUrl로 반환된다", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({
         text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
-      const result = await generateNaverDraft(
-        {
-          ...mockPost,
-          contentAttachments: [
-            { kind: "image", url: "https://s3.example.com/exterior.jpg", label: "가게 외관" },
-          ],
-        },
-        undefined,
-        "https://s3.example.com/exterior.jpg"
-      )
+      // 라벨이 의미 있는 텍스트("가게 외관")면 비전 호출 없이 라벨 자체로 외관 여부를
+      // 판정하므로(EXTERIOR_LABEL_HINT), 이 테스트는 추가 vision mock 없이 결정론적으로 통과한다.
+      const { content: result, leadImageUrl } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/exterior.jpg", label: "가게 외관" },
+        ],
+      })
 
       const markerIndex = result.indexOf(
         "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://s3.example.com/exterior.jpg]"
       )
       const secondParagraphIndex = result.indexOf("두 번째 이야기입니다")
 
+      expect(leadImageUrl).toBe("https://s3.example.com/exterior.jpg")
       expect(markerIndex).toBeGreaterThan(-1)
       expect(markerIndex).toBeLessThan(secondParagraphIndex) // 첫 번째 후보 문단(=두 번째 문단) 뒤에 붙음
     })
@@ -856,7 +859,7 @@ describe("llm", () => {
 
       // 첨부 순서는 티라미수 → 우니초밥 이지만(=위치 기반이면 첫 자리는 우니초밥 문단을
       // 차지해야 함), 실제로는 캡션 키워드가 겹치는 문단으로 각각 배치되어야 한다.
-      const result = await generateNaverDraft({
+      const { content: result } = await generateNaverDraft({
         ...mockPost,
         contentAttachments: [
           { kind: "image", url: "https://s3.example.com/tiramisu.jpg", label: "티라미수 디저트" },

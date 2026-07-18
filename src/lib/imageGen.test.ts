@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { generateAiImage, verifyImageRelevance } from "./imageGen"
+import { generateAiImage, verifyImageRelevance, runVisionPromptBatch } from "./imageGen"
 
 const generateContentMock = vi.fn()
 const { fetchMock } = vi.hoisted(() => ({
@@ -206,6 +206,63 @@ describe("imageGen", () => {
       // VERIFY_MODEL_FALLBACK_CHAIN 3개 모델(gemini-2.0-flash는 limit:0 확인되어 제외됨),
       // 모델당 1회씩만 시도(재시도 없음) = 3회
       expect(generateContentMock).toHaveBeenCalledTimes(3)
+    })
+  })
+
+  describe("runVisionPromptBatch", () => {
+    function mockImageDownloadOk() {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => "image/jpeg" },
+        arrayBuffer: async () => new ArrayBuffer(4),
+      })
+    }
+
+    it("여러 이미지를 한 번의 모델 호출로 묶어 보낸다", async () => {
+      mockImageDownloadOk()
+      mockImageDownloadOk()
+      generateContentMock.mockResolvedValueOnce({ text: "1) a | 예\n2) b | 아니오" })
+
+      const { successIndexes, text } = await runVisionPromptBatch(
+        "test-key",
+        ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+        "분석해줘"
+      )
+
+      expect(successIndexes).toEqual([0, 1])
+      expect(text).toBe("1) a | 예\n2) b | 아니오")
+      expect(generateContentMock).toHaveBeenCalledTimes(1) // 이미지 2장이어도 호출은 1회
+      const parts = generateContentMock.mock.calls[0][0].contents[0].parts
+      expect(parts).toHaveLength(3) // 이미지 2장 + 안내 텍스트 1개
+    })
+
+    it("일부 이미지 다운로드가 실패하면 성공한 이미지만 순서를 유지해 보낸다", async () => {
+      mockImageDownloadOk() // 1번째 성공
+      fetchMock.mockResolvedValueOnce({ ok: false }) // 2번째 실패
+      mockImageDownloadOk() // 3번째 성공
+      generateContentMock.mockResolvedValueOnce({ text: "1) a | 아니오\n2) c | 아니오" })
+
+      const { successIndexes } = await runVisionPromptBatch(
+        "test-key",
+        ["https://example.com/1.jpg", "https://example.com/2.jpg", "https://example.com/3.jpg"],
+        "분석해줘"
+      )
+
+      expect(successIndexes).toEqual([0, 2]) // 원래 인덱스 기준(1번째, 3번째만 성공)
+    })
+
+    it("모든 이미지 다운로드가 실패하면 모델을 호출하지 않고 null을 반환한다", async () => {
+      fetchMock.mockResolvedValue({ ok: false })
+
+      const { successIndexes, text } = await runVisionPromptBatch(
+        "test-key",
+        ["https://example.com/1.jpg"],
+        "분석해줘"
+      )
+
+      expect(text).toBeNull()
+      expect(successIndexes).toEqual([])
+      expect(generateContentMock).not.toHaveBeenCalled()
     })
   })
 })

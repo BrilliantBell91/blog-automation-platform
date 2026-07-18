@@ -6,10 +6,11 @@ import {
   type IllustrativeImageStyle,
 } from "./imageGen"
 import { searchRealImages, searchGoogleImages } from "./imageSearch"
-import { describeImage, matchImagesToParagraphs } from "./imageMatching"
+import { analyzeImagesBatch, matchImagesToParagraphs } from "./imageMatching"
 import { searchNaverPlace } from "./naverLocalSearch"
 import { extractNaverPlaceId, fetchNaverPlaceDetail, fetchNaverPlacePhotos } from "./naverPlaceDetail"
 import { inferFacilityFromReviews } from "./naverReviewSearch"
+import { findExteriorImageViaSearch } from "./thumbnail"
 import { extractLinkLabel } from "./naverDraftParser"
 import { withRetry, shouldTryNextModel } from "./geminiRetry"
 
@@ -573,6 +574,11 @@ function splitLongParagraphs(paragraphs: string[], maxLength = 200): string[] {
   return result
 }
 
+interface InsertImagesResult {
+  text: string
+  leadImageUrl?: string
+}
+
 // 사용자 첨부 사진과 부족분(실사 검색/AI 생성)을 모두 서술형 문단 사이사이에 프로그래밍적으로
 // 끼워넣는다. 첨부 사진의 URL은 LLM에게 애초에 주지 않으므로(위 formatImageAttachmentHints
 // 참고) 여기서 코드가 직접 삽입해야 실제로 첨부한 사진이 결과에 반드시 포함된다.
@@ -582,9 +588,8 @@ function splitLongParagraphs(paragraphs: string[], maxLength = 200): string[] {
 async function insertImages(
   text: string,
   apiKey: string,
-  post: Post,
-  leadImageUrl?: string
-): Promise<string> {
+  post: Post
+): Promise<InsertImagesResult> {
   const attachments = (post.contentAttachments ?? []).filter((a) => a.kind === "image")
   const entry = post.category ? CATEGORY_STYLE_NOTES[post.category] : undefined
   const allowAiFallback = entry?.allowAiFallback ?? DEFAULT_ALLOW_AI_FALLBACK
@@ -600,19 +605,89 @@ async function insertImages(
 
   const shortfall = Math.max(targetCount - attachments.length, 0)
   const totalSlots = attachments.length + shortfall
-  if (totalSlots === 0) return text
+  if (totalSlots === 0) return { text }
 
   const points = selectImageInsertionPoints(candidates, totalSlots)
-  if (points.length === 0) return text
+  if (points.length === 0) return { text }
 
   const mapLink = (post.contentAttachments ?? []).find(
     (a) => a.kind === "link" && isNaverMapUrl(a.url)
   )
   const placeId = mapLink ? extractNaverPlaceId(mapLink.url) : null
 
-  // 뒤쪽 자리(부족분)는 검색/생성으로 채운다 — 검색어/생성 프롬프트 자체가 그 문단
-  // 텍스트를 기반으로 하므로 이미 내용상 매칭되어 있다.
-  const shortfallPoints = points.slice(attachments.length)
+  const result = [...paragraphs]
+  // 배열에 새 원소를 끼워넣는 대신 대상 문단 뒤에 마커를 이어붙이므로 인덱스가 밀리지 않는다.
+  // 같은 문단에 마커가 여러 개 이어붙는 것도 안전하게 처리된다(비슷한 사진끼리 묶이는 효과).
+  const appendImageMarker = (paragraphIndex: number, imageUrl: string) => {
+    result[paragraphIndex] =
+      result[paragraphIndex] +
+      `\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${imageUrl}]`
+  }
+
+  // STEP 1(최우선): 첨부 사진을 배치 비전 호출로 분석(캡션+외관 여부, 여러 장을 한 번의
+  // 호출로 묶음). 사용자의 실제 사진을 다루는 이 작업이 가장 중요하므로, 무료 티어
+  // 할당량이 남아있을 때 가장 먼저 소비한다 — 부족분 채우기(STEP 3, 검색·검증·AI 생성)를
+  // 먼저 실행하면 할당량이 앞에서 소진돼 정작 중요한 캡션/외관 판별이 실패하는 사고가
+  // 실측으로 확인됐다.
+  const analyses =
+    attachments.length > 0
+      ? await analyzeImagesBatch(
+          apiKey,
+          attachments.map((a) => ({ url: a.url, existingLabel: a.label }))
+        )
+      : []
+
+  const leadFromAttachmentIndex = analyses.findIndex((a) => a.isExterior)
+  const leadFromAttachment =
+    leadFromAttachmentIndex >= 0 ? attachments[leadFromAttachmentIndex] : undefined
+
+  let leadImageUrl: string | undefined = leadFromAttachment?.url
+  let leadFromSearch = false
+
+  // STEP 2: 첨부 사진이 하나 이상 있는데 그중 외관 사진이 없고, 방문 후기형 카테고리
+  // (나들이/맛집)면 웹 검색으로 외관 사진을 찾는다. 첨부 사진이 아예 없는 글(사진 없이
+  // 텍스트만 있는 경우)은 애초에 "대표 사진"이라는 개념이 약하므로 검색을 시도하지
+  // 않는다. 검색으로 찾은 사진은 원래 attachments 목록에 없으므로, 여기서 직접
+  // 삽입해야 실제로 본문에 반영된다(예전엔 별도 함수가 DB 카드 썸네일만 갱신하고 초안
+  // 본문에는 전혀 반영되지 않는 사고가 있었다). 부족분(shortfall) 슬롯 하나를 대체한
+  // 것으로 취급해 전체 이미지 개수가 카테고리 목표치와 계속 일치하게 한다.
+  if (!leadImageUrl && !allowAiFallback && attachments.length > 0) {
+    const searched = await findExteriorImageViaSearch(apiKey, post.title)
+    if (searched) {
+      leadImageUrl = searched
+      leadFromSearch = true
+    }
+  }
+
+  if (leadImageUrl && candidates.length > 0) {
+    appendImageMarker(candidates[0], leadImageUrl)
+  }
+
+  // 나머지 첨부 사진(리드로 뽑히지 않은 것)은 위치 순서가 아니라 캡션 키워드 겹침으로
+  // 배치한다 — 균등 간격 배치는 "우니초밥을 얘기하는 문단에 엉뚱한 사진이 붙는" 사고의
+  // 원인이었다. 비슷한 캡션의 사진들은 같은 문단으로 몰려 자연히 인접 배치(그룹핑)된다.
+  // 매칭이 실패해도(캡션 없음, 겹치는 키워드 없음 등) 첨부 사진은 반드시 결과에 포함해야
+  // 하므로(전부 포함 불변식), 균등 배치로 골라둔 points를 폴백 위치로 쓴다.
+  const matchableEntries = attachments
+    .map((attachment, i) => ({ attachment, analysis: analyses[i] }))
+    .filter(({ attachment }) => attachment.url !== leadFromAttachment?.url)
+
+  if (matchableEntries.length > 0) {
+    const candidateParagraphs = candidates.map((index) => ({ index, text: paragraphs[index] }))
+    const matchedIndexes = matchImagesToParagraphs(
+      matchableEntries.map(({ analysis }) => ({ caption: analysis.caption })),
+      candidateParagraphs
+    )
+    matchableEntries.forEach(({ attachment }, i) => {
+      const paragraphIndex = matchedIndexes[i] ?? points[i % points.length]
+      appendImageMarker(paragraphIndex, attachment.url)
+    })
+  }
+
+  // STEP 3: 부족분(검색/AI 생성)으로 채운다 — 검색어/생성 프롬프트 자체가 그 문단 텍스트를
+  // 기반으로 하므로 이미 내용상 매칭되어 있다. 리드 사진을 검색으로 찾았다면(leadFromSearch)
+  // 그만큼 부족분 슬롯을 하나 줄인다(이미 한 자리를 채웠으므로).
+  const shortfallPoints = points.slice(attachments.length + (leadFromSearch ? 1 : 0))
   const shortfallImages =
     shortfallPoints.length > 0
       ? await resolveShortfallImages(
@@ -626,70 +701,29 @@ async function insertImages(
         )
       : []
 
-  const result = [...paragraphs]
-  // 배열에 새 원소를 끼워넣는 대신 대상 문단 뒤에 마커를 이어붙이므로 인덱스가 밀리지 않는다.
-  // 같은 문단에 마커가 여러 개 이어붙는 것도 안전하게 처리된다(비슷한 사진끼리 묶이는 효과).
-  const appendImageMarker = (paragraphIndex: number, imageUrl: string) => {
-    result[paragraphIndex] =
-      result[paragraphIndex] +
-      `\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${imageUrl}]`
-  }
-
-  // 대표(외관) 사진이 있으면 가장 이른 후보 문단에 강제 배치한다 — 실제 블로그 글은
-  // 서두 직후 가게 외관 사진이 오는 경우가 많은데, 의미 매칭에만 맡기면 캡션이 애매한
-  // 외관 사진이 본문 중간/끝으로 밀리는 경우가 실측으로 확인됐다. 나머지 사진의 의미
-  // 매칭과는 독립적으로, 이 사진만 위치를 직접 지정한다.
-  const leadAttachment = leadImageUrl
-    ? attachments.find((a) => a.url === leadImageUrl)
-    : undefined
-  if (leadAttachment && candidates.length > 0) {
-    appendImageMarker(candidates[0], leadAttachment.url)
-  }
-  const matchableAttachments = leadAttachment
-    ? attachments.filter((a) => a.url !== leadAttachment.url)
-    : attachments
-
-  // 나머지 첨부 사진은 위치 순서가 아니라 사진 내용과 문단 내용의 키워드 겹침으로
-  // 배치한다 — 균등 간격 배치는 "우니초밥을 얘기하는 문단에 엉뚱한 사진이 붙는" 사고의
-  // 원인이었다. 비슷한 캡션의 사진들은 같은 문단으로 몰려 자연히 인접 배치(그룹핑)된다.
-  // 매칭이 실패해도(캡션 생성 실패, 겹치는 키워드 없음 등) 첨부 사진은 반드시 결과에
-  // 포함해야 하므로(전부 포함 불변식), 균등 배치로 골라둔 points를 폴백 위치로 쓴다.
-  if (matchableAttachments.length > 0) {
-    const captions = await Promise.all(
-      matchableAttachments.map((a) => describeImage(apiKey, a.url, a.label))
-    )
-    const candidateParagraphs = candidates.map((index) => ({ index, text: paragraphs[index] }))
-
-    const matchedIndexes = matchImagesToParagraphs(
-      captions.map((caption) => ({ caption })),
-      candidateParagraphs
-    )
-
-    matchableAttachments.forEach((attachment, i) => {
-      const paragraphIndex = matchedIndexes[i] ?? points[i % points.length]
-      appendImageMarker(paragraphIndex, attachment.url)
-    })
-  }
-
   shortfallPoints.forEach((pointIndex, k) => {
     const imageUrl = shortfallImages[k]
     if (!imageUrl) return
     appendImageMarker(pointIndex, imageUrl)
   })
 
-  return result.join("\n\n")
+  return { text: result.join("\n\n"), leadImageUrl }
+}
+
+export interface NaverDraftResult {
+  content: string
+  // 초안 본문 최상단에 배치된 대표(외관) 사진 URL. 호출부(route.ts)가 이 값으로 DB의
+  // Post.imageUrl(카드 썸네일)을 함께 동기화할 수 있도록 반환한다.
+  leadImageUrl?: string
 }
 
 /**
  * LLM(Gemini)을 이용한 네이버 블로그 스타일 초안 생성
- * leadImageUrl: 대표(외관) 사진으로 판별된 첨부 이미지 URL이 있으면, 본문 최상단
- * 이미지 자리에 강제로 배치한다(thumbnail.ts의 resolveThumbnailUrl 결과를 그대로 전달).
  */
 export async function generateNaverDraft(
   post: Post,
-  styleGuide?: string,
-  leadImageUrl?: string
-): Promise<string> {
+  styleGuide?: string
+): Promise<NaverDraftResult> {
   const apiKey = process.env.LLM_API_KEY
   if (!apiKey) {
     throw new Error("LLM_API_KEY가 설정되지 않았습니다.")
@@ -716,7 +750,8 @@ export async function generateNaverDraft(
         throw new Error("LLM 응답에서 텍스트를 추출할 수 없습니다.")
       }
 
-      return await insertImages(response.text, apiKey, post, leadImageUrl)
+      const { text, leadImageUrl } = await insertImages(response.text, apiKey, post)
+      return { content: text, leadImageUrl }
     } catch (error) {
       if (!shouldTryNextModel(error)) throw error
       console.warn(`[llm] ${model} 사용 불가(할당량 소진/미지원) — 다음 모델로 전환`, error)
