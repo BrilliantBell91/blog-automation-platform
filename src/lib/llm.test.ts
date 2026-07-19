@@ -948,6 +948,39 @@ describe("llm", () => {
       expect(markerIndex).toBeLessThan(secondParagraphIndex) // 첫 번째 후보 문단(=두 번째 문단) 뒤에 붙음
     })
 
+    it("첨부 사진 중 어느 것도 외관으로 판별되지 않아도, Notion 커버(post.imageUrl)와 일치하는 첨부가 있으면 그걸 대표 사진으로 우선한다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: 맛집 리뷰 글은 실제로 "건물 외관" 사진 자체를 첨부하지 않는
+      // 경우가 흔하다(예: 오마카세 후기 - 음식/실내 클로즈업 14장뿐, 외관 없음). 이때
+      // AI가 "외관 아님"으로 정확히 판별해도 대표 사진 후보가 사라지고, 웹 검색은 동명의
+      // 다른 가게나 무관한 사진을 대표 사진으로 잘못 채택할 위험이 크다. 사용자가 이미
+      // Notion에서 커버로 지정해둔 사진(post.imageUrl)이 첨부 목록에 있으면, AI 판별이나
+      // 웹 검색보다 그 선택을 우선 신뢰해야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+      })
+      // 첨부(2장)가 카테고리 목표치(4)보다 적어 STEP 3 부족분 채우기 검색은 정상적으로
+      // 시도되지만("테스트 포스트 서울"/"카페" 등 태그 기반 쿼리), 대표 사진 전용 검색
+      // ("... 외관" 쿼리)만큼은 커버 사진 덕분에 시도되지 않아야 한다.
+      searchRealImagesMock.mockResolvedValue([])
+
+      const { content: result, leadImageUrl } = await generateNaverDraft({
+        ...mockPost,
+        imageUrl: "https://s3.example.com/cover.jpg?X-Amz-Signature=abc",
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/food1.jpg", label: "음식 사진 1" },
+          // 서명(쿼리스트링)만 다르고 경로는 post.imageUrl과 동일한 첨부
+          { kind: "image", url: "https://s3.example.com/cover.jpg?X-Amz-Signature=xyz", label: "음식 사진 2" },
+        ],
+      })
+
+      expect(leadImageUrl).toBe("https://s3.example.com/cover.jpg?X-Amz-Signature=xyz")
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://s3.example.com/cover.jpg?X-Amz-Signature=xyz]"
+      )
+      expect(searchRealImagesMock).not.toHaveBeenCalledWith("테스트 포스트 외관", 5)
+    })
+
     it("리드로 뽑힌 첨부 사진이 있을 때, 캡션 매칭에 실패한 다른 첨부 사진은 리드 사진과 같은 문단에 겹치지 않는다 (회귀 테스트)", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({

@@ -69,7 +69,7 @@ function splitLeadingQuoteLine(
 // URL의 쿼리스트링(서명 등)을 제거한 "경로" 부분만 뽑아낸다. Notion 첨부 사진의 S3 서명
 // URL은 버킷/키(경로)는 고정이고 서명(X-Amz-* 쿼리스트링)만 재조회 때마다 바뀌므로,
 // 경로가 같으면 "같은 사진의 최신 서명"이라고 판단할 수 있다.
-function urlPath(url: string): string | null {
+export function urlPath(url: string): string | null {
   try {
     const parsed = new URL(url)
     return parsed.origin + parsed.pathname
