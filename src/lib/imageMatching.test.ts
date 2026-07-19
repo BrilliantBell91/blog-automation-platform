@@ -37,6 +37,23 @@ describe("imageMatching", () => {
       expect(result).toEqual([{ caption: "우니, 초밥, 클로즈업", isExterior: false }])
     })
 
+    it("영문자가 섞인 메신저/카메라 앱 자동 파일명(예: 카카오톡 전송 파일명)도 의미 없는 라벨로 판정해 비전 배치 호출로 캡션을 생성한다 (회귀 테스트)", async () => {
+      // 과거 정규식은 숫자만 허용해 "KakaoTalk_..." 같은 영문 포함 파일명을 못 잡았고,
+      // 그 결과 파일명 자체가 캡션으로 쓰여 문단 매칭이 항상 실패하고 외관 판별도
+      // 항상 false가 되는 사고로 이어졌다(실측 확인).
+      runVisionPromptBatchMock.mockResolvedValueOnce({
+        successIndexes: [0],
+        text: "1) 가게 외관, 간판 | 예",
+      })
+
+      const result = await analyzeImagesBatch("test-key", [
+        { url: "https://example.com/1.jpg", existingLabel: "KakaoTalk_20260717_161714013_11.jpg" },
+      ])
+
+      expect(runVisionPromptBatchMock).toHaveBeenCalledTimes(1)
+      expect(result).toEqual([{ caption: "가게 외관, 간판", isExterior: true }])
+    })
+
     it("여러 장을 배치 크기(5장) 단위로 나눠 여러 번 호출한다", async () => {
       runVisionPromptBatchMock
         .mockResolvedValueOnce({

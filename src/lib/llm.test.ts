@@ -204,6 +204,23 @@ describe("llm", () => {
       )
     })
 
+    it("사진 첨부가 여러 장이면 개수와 함께 사진 개수만큼 문단을 나눠 쓰라는 안내가 사용자 메시지에 들어간다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/a.jpg", label: "가게 전경" },
+          { kind: "image", url: "https://s3.example.com/b.jpg", label: "우니초밥" },
+        ],
+      })
+
+      const callArgs = generateContentMock.mock.calls[0][0]
+      expect(callArgs.contents).toContain("첨부된 사진 설명 (총 2장")
+      expect(callArgs.contents).toContain("사진 개수만큼 문단으로 나눠 쓰세요")
+    })
+
     it("지도 URL에 place ID가 있으면 그 ID로 상세 정보를 조회해 확인된 매장 정보에 반영한다", async () => {
       process.env.LLM_API_KEY = "test-key"
       fetchNaverPlaceDetailMock.mockResolvedValueOnce({

@@ -16,6 +16,21 @@ describe("parseNaverDraft", () => {
     ])
   })
 
+  it("마커([참고링크...]) 없이 URL 한 줄뿐인 문단도 link 블록으로 변환한다 (회귀 테스트)", () => {
+    // LLM이 "마커 형식을 그대로 유지하라"는 지시를 어기고 대괄호 래퍼 없이 URL만
+    // 남기는 경우가 실측으로 확인됐다 — 파서가 이를 흡수하지 못하면 원본 URL이
+    // 그대로 텍스트로 노출된다(위치 카드 대신).
+    const content = "https://map.naver.com/p/entry/place/1377140070?lng=126.77&lat=37.50"
+    const blocks = parseNaverDraft(content)
+    expect(blocks).toEqual([
+      {
+        type: "link",
+        url: "https://map.naver.com/p/entry/place/1377140070?lng=126.77&lat=37.50",
+        label: "지도에서 위치 보기",
+      },
+    ])
+  })
+
   it("지도 URL의 searchText 쿼리에서 장소명을 라벨로 추출한다", () => {
     const content =
       "[참고링크 - 지도/메뉴/리뷰 등 실제로 확인되는 내용만 반영: https://map.naver.com/p/search/place?searchText=%EB%B6%80%ED%8F%89%20%EC%9D%B4%EC%9E%90%EC%B9%B4%EC%95%BC]"

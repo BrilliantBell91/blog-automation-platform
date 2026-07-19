@@ -12,6 +12,11 @@ export type NaverDraftBlock =
 
 const PHOTO_MARKER = /^\[사진 원본[^:]*:\s*([^\]\s]+)\]\s*(.*)$/
 const LINK_MARKER = /^\[참고링크[^:]*:\s*([^\]\s]+)\]\s*(.*)$/
+// LLM이 "마커 형식을 그대로 유지하라"는 지시를 어기고 [참고링크 ...] 대괄호 래퍼를
+// 빼먹은 채 URL만 남기는 경우가 실측으로 확인됐다(예: "위치는 요기 ▼" 다음 문단이
+// 순수 지도 URL 한 줄뿐). 문단 전체가 URL 하나뿐이면 마커가 없어도 링크 카드로
+// 렌더링해, 프롬프트 재지시에 의존하지 않고 파싱 단계에서 안전하게 흡수한다.
+const BARE_URL_LINE = /^(https?:\/\/\S+)$/
 
 // 지도 URL을 그대로 노출하면 실제 게시글처럼 안 보이므로, 검색어/장소명 쿼리 파라미터나
 // 경로에서 사람이 읽을 수 있는 라벨을 뽑아내 링크 카드에 쓴다. 못 찾으면 기본 문구로 대체.
@@ -118,6 +123,11 @@ export function parseNaverDraft(content: string): NaverDraftBlock[] {
     const linkMatch = paragraph.match(LINK_MARKER)
     if (linkMatch) {
       return [{ type: "link", url: linkMatch[1], label: extractLinkLabel(linkMatch[1]) }]
+    }
+
+    const bareUrlMatch = paragraph.match(BARE_URL_LINE)
+    if (bareUrlMatch) {
+      return [{ type: "link", url: bareUrlMatch[1], label: extractLinkLabel(bareUrlMatch[1]) }]
     }
 
     const tags = isHashtagLine(paragraph)

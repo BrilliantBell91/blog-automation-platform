@@ -216,7 +216,7 @@ function formatImageAttachmentHints(attachments: LlmAttachment[]): string {
     .map((a, i) => `${i + 1}. ${a.label}`)
 
   if (captions.length === 0) return ""
-  return `\n\n첨부된 사진 설명 (참고용 - 사진 위치는 시스템이 자동 배치하니 마커는 쓰지 말고, 자연스러운 언급에만 활용):\n${captions.join("\n")}`
+  return `\n\n첨부된 사진 설명 (총 ${captions.length}장 - 사진 위치는 시스템이 자동 배치하니 마커는 쓰지 말고, 자연스러운 언급에만 활용. 사진이 많으니 하나의 긴 문단에 여러 사진 얘기를 몰아 쓰지 말고, 사진 한 장당 짧은 문단(1~3문장) 하나씩 대응하도록 본문을 사진 개수만큼 문단으로 나눠 쓰세요):\n${captions.join("\n")}`
 }
 
 function isNaverMapUrl(url: string): boolean {
