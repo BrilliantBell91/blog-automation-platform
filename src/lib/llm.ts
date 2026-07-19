@@ -673,6 +673,15 @@ async function insertImages(
     .map((attachment, i) => ({ attachment, analysis: analyses[i] }))
     .filter(({ attachment }) => attachment.url !== leadFromAttachment?.url)
 
+  // points[0]은 항상 candidates[0]과 같고, 리드 사진이 첨부 목록에서 나왔다면(leadFromAttachment)
+  // 이미 그 자리에 리드 사진이 꽂혀 있다. matchableEntries는 리드 사진을 제외한 목록이라
+  // 개수가 하나 줄어드는데, 폴백 위치를 points 배열 그대로(0부터) 쓰면 매칭에 실패한 첫
+  // 번째 사진이 points[0](=리드 사진 자리)으로 다시 떨어져 대표 사진과 같은 문단에
+  // 엉뚱한 사진이 겹쳐 삽입되는 사고가 났다(실측 확인됨). 리드 사진이 첨부에서 나온
+  // 경우에만 points[0]을 건너뛴다 — 검색으로 찾은 리드 사진(leadFromSearch)은 애초에
+  // attachments 개수에 포함되지 않으므로 points[0]부터 그대로 써야 슬롯 수가 맞는다.
+  const matchableFallbackPoints = leadFromAttachment && points.length > 1 ? points.slice(1) : points
+
   if (matchableEntries.length > 0) {
     const candidateParagraphs = candidates.map((index) => ({ index, text: paragraphs[index] }))
     const matchedIndexes = matchImagesToParagraphs(
@@ -680,7 +689,8 @@ async function insertImages(
       candidateParagraphs
     )
     matchableEntries.forEach(({ attachment }, i) => {
-      const paragraphIndex = matchedIndexes[i] ?? points[i % points.length]
+      const paragraphIndex =
+        matchedIndexes[i] ?? matchableFallbackPoints[i % matchableFallbackPoints.length]
       appendImageMarker(paragraphIndex, attachment.url)
     })
   }

@@ -12,6 +12,7 @@ const {
   fetchNaverPlacePhotosMock,
   fetchMock,
   generateGroqTextMock,
+  generateGroqVisionTextMock,
 } = vi.hoisted(() => ({
   searchRealImagesMock: vi.fn().mockResolvedValue([]),
   searchGoogleImagesMock: vi.fn().mockResolvedValue([]),
@@ -25,6 +26,11 @@ const {
   // 기본값 null: Gemini 체인이 전부 실패해도 Groq 키가 없으면(기본 상태) 기존과 동일하게
   // lastError를 던져야 하므로, 명시적으로 mockResolvedValueOnce하지 않는 한 항상 null.
   generateGroqTextMock: vi.fn().mockResolvedValue(null),
+  // analyzeImagesBatch(imageMatching.ts)가 내부적으로 runVisionPromptBatch/callVisionModel
+  // (imageGen.ts)을 실제 구현 그대로 거치므로, 그 경로가 Gemini 소진 후 시도하는
+  // generateGroqVisionText도 이 파일에서 함께 목킹해야 한다 — 안 하면 imageGen.ts가 가져오는
+  // 값이 undefined가 되어 "generateGroqVisionText is not a function"으로 터진다.
+  generateGroqVisionTextMock: vi.fn().mockResolvedValue(null),
 }))
 
 vi.stubGlobal("fetch", fetchMock)
@@ -40,6 +46,7 @@ vi.mock("./naverLocalSearch", () => ({
 
 vi.mock("./groqClient", () => ({
   generateGroqText: generateGroqTextMock,
+  generateGroqVisionText: generateGroqVisionTextMock,
 }))
 
 // extractNaverPlaceId는 실제 구현(순수 정규식 파싱)을 그대로 쓰고, fetchNaverPlaceDetail/
@@ -123,6 +130,7 @@ describe("llm", () => {
     fetchNaverPlacePhotosMock.mockReset().mockResolvedValue([])
     fetchMock.mockReset().mockResolvedValue({ ok: false })
     generateGroqTextMock.mockReset().mockResolvedValue(null)
+    generateGroqVisionTextMock.mockReset().mockResolvedValue(null)
   })
 
   describe("generateNaverDraft", () => {
@@ -893,6 +901,40 @@ describe("llm", () => {
       expect(leadImageUrl).toBe("https://s3.example.com/exterior.jpg")
       expect(markerIndex).toBeGreaterThan(-1)
       expect(markerIndex).toBeLessThan(secondParagraphIndex) // 첫 번째 후보 문단(=두 번째 문단) 뒤에 붙음
+    })
+
+    it("리드로 뽑힌 첨부 사진이 있을 때, 캡션 매칭에 실패한 다른 첨부 사진은 리드 사진과 같은 문단에 겹치지 않는다 (회귀 테스트)", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+      })
+
+      // exterior.jpg는 라벨에 "외관"이 있어 결정론적으로 leadImageUrl이 된다(candidates[0]=
+      // 첫 번째 후보 문단에 배치). random.jpg는 캡션이 어느 문단과도 겹치지 않아 매칭에
+      // 실패하고 폴백 위치로 떨어지는데, points[0](=리드 사진 자리)로 되돌아가 리드 사진과
+      // 같은 문단에 겹쳐 삽입되던 버그가 있었다 — "대표 사진 옆에 엉뚱한 사진이 같이
+      // 붙는다"는 재발 신고의 원인이었다. 수정 후에는 리드 사진이 이미 쓴 자리를 건너뛰고
+      // 다음 후보 문단(=두 번째 후보 문단)에 배치돼야 한다.
+      const { content: result, leadImageUrl } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/exterior.jpg", label: "가게 외관" },
+          { kind: "image", url: "https://s3.example.com/random.jpg", label: "전혀 상관없는 잡담" },
+        ],
+      })
+
+      const firstParagraphIndex = result.indexOf("첫 번째 이야기입니다")
+      const secondParagraphIndex = result.indexOf("두 번째 이야기입니다")
+      const exteriorMarkerIndex = result.indexOf("https://s3.example.com/exterior.jpg")
+      const randomMarkerIndex = result.indexOf("https://s3.example.com/random.jpg")
+
+      expect(leadImageUrl).toBe("https://s3.example.com/exterior.jpg")
+      // 리드 사진은 첫 번째 후보 문단(첫 번째 이야기와 두 번째 이야기 문단 사이)에 위치
+      expect(exteriorMarkerIndex).toBeGreaterThan(firstParagraphIndex)
+      expect(exteriorMarkerIndex).toBeLessThan(secondParagraphIndex)
+      // 매칭 실패한 사진은 리드 사진과 같은 문단(첫 번째 후보)이 아니라 두 번째 후보 문단
+      // 뒤에 위치해야 한다 — 즉 "두 번째 이야기입니다" 문단 텍스트보다 뒤에 나와야 한다.
+      expect(randomMarkerIndex).toBeGreaterThan(secondParagraphIndex)
     })
 
     it("첨부 사진은 위치 순서가 아니라 캡션 키워드가 겹치는 문단에 매칭된다", async () => {
