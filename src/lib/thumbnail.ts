@@ -6,6 +6,7 @@
 
 import { runVisionPrompt } from "./imageGen"
 import { searchRealImages, searchGoogleImages } from "./imageSearch"
+import { fetchNaverPlacePhotos } from "./naverPlaceDetail"
 
 const EXTERIOR_CLASSIFY_PROMPT = `이 사진이 가게/매장/장소의 외관(건물 정면, 간판이 보이는 입구, 외부 전경) 사진인지 판단해주세요.
 음식, 실내 인테리어, 메뉴판, 사람 얼굴 클로즈업 등은 외관 사진이 아닙니다.
@@ -27,13 +28,29 @@ function cleanTitleForSearch(title: string): string {
 }
 
 /**
- * 웹 검색으로 가게 외관 사진을 찾아 검증까지 통과한 URL을 반환한다. 찾지 못하면 null.
+ * 가게 외관 사진을 찾아 검증까지 통과한 URL을 반환한다. 찾지 못하면 null.
+ *
+ * placeId(사용자가 Notion 속성에 등록한 지도 URL에서 뽑은 네이버 플레이스 ID)가 있으면
+ * 그 place ID로 실제 등록된 사진(업체가 직접 올린 사진 우선, 그다음 방문자 사진)만
+ * 후보로 검증한다 — 지도 URL로 "이 가게가 맞다"는 게 이미 검증돼 있으므로, 이름이 같은
+ * 다른 가게나 전혀 무관한 사진이 섞이지 않는다. placeId가 없을 때만(지도 링크를
+ * 첨부하지 않은 글) 상호명/제목 텍스트로 웹 전체를 검색하는 것으로 폴백한다 — 이 경로는
+ * 동명의 다른 가게 사진이 섞일 위험이 있어 place ID 기준보다 신뢰도가 낮다.
  */
 export async function findExteriorImageViaSearch(
   apiKey: string,
-  postTitle: string
+  postTitle: string,
+  placeId?: string | null
 ): Promise<string | null> {
   if (!apiKey) return null
+
+  if (placeId) {
+    const verifiedPhotos = await fetchNaverPlacePhotos(placeId, MAX_CANDIDATES_TO_VERIFY)
+    for (const candidate of verifiedPhotos) {
+      if (await classifyExteriorPhoto(apiKey, candidate)) return candidate
+    }
+    return null
+  }
 
   const query = `${cleanTitleForSearch(postTitle)} 외관`
   const candidates = [

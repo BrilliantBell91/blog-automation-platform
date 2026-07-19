@@ -11,7 +11,7 @@ import { searchNaverPlace } from "./naverLocalSearch"
 import { extractNaverPlaceId, fetchNaverPlaceDetail, fetchNaverPlacePhotos } from "./naverPlaceDetail"
 import { inferFacilityFromReviews } from "./naverReviewSearch"
 import { findExteriorImageViaSearch } from "./thumbnail"
-import { extractLinkLabel, urlPath } from "./naverDraftParser"
+import { extractLinkLabel } from "./naverDraftParser"
 import { withRetry, shouldTryNextModel } from "./geminiRetry"
 import { generateGroqText } from "./groqClient"
 
@@ -664,36 +664,27 @@ async function insertImages(
         )
       : []
 
-  // 리드(대표) 사진 우선순위: (1) 사용자가 Notion에서 직접 지정한 커버 이미지(post.imageUrl)가
-  // 첨부 목록에 있으면 최우선 — 실사 리뷰 글은 애초에 "건물 외관" 사진 자체가 없는 경우가
-  // 흔하고(이 프로젝트 실측 사례: 오마카세 첨부 14장이 전부 음식/실내 클로즈업), 그럴 때
-  // AI의 "외관 여부" 판별이나 인터넷 검색으로 낯선 타인의 사진을 대표 사진으로 쓰는 것보다
-  // 사용자가 이미 직접 골라둔 사진을 존중하는 쪽이 훨씬 신뢰할 수 있다. (2) 그다음 첨부 중
-  // 비전 분석으로 외관이라 판별된 사진. (3) 그것도 없으면 웹 검색(가장 신뢰도 낮음).
-  const leadFromCoverIndex = post.imageUrl
-    ? attachments.findIndex((a) => urlPath(a.url) === urlPath(post.imageUrl!))
-    : -1
-  const leadFromAttachmentIndex =
-    leadFromCoverIndex >= 0 ? leadFromCoverIndex : analyses.findIndex((a) => a.isExterior)
+  const leadFromAttachmentIndex = analyses.findIndex((a) => a.isExterior)
   const leadFromAttachment =
     leadFromAttachmentIndex >= 0 ? attachments[leadFromAttachmentIndex] : undefined
 
   let leadImageUrl: string | undefined = leadFromAttachment?.url
   let leadFromSearch = false
 
-  // STEP 2: 위 두 방법으로도 대표 사진을 못 찾았고, 방문 후기형 카테고리(나들이/맛집)면
-  // 웹 검색으로 외관 사진을 찾는다. 첨부 사진이 아예 없는 글(사진 없이 텍스트만 있는
-  // 경우)은 애초에 "대표 사진"이라는 개념이 약하므로 검색을 시도하지 않는다. 검색으로
-  // 찾은 사진은 원래 attachments 목록에 없으므로, 여기서 직접 삽입해야 실제로 본문에
-  // 반영된다(예전엔 별도 함수가 DB 카드 썸네일만 갱신하고 초안 본문에는 전혀 반영되지
-  // 않는 사고가 있었다). 부족분(shortfall) 슬롯 하나를 대체한 것으로 취급해 전체 이미지
-  // 개수가 카테고리 목표치와 계속 일치하게 한다.
+  // STEP 2: 첨부 사진이 하나 이상 있는데 그중 외관 사진이 없고, 방문 후기형 카테고리
+  // (나들이/맛집)면 웹에서 외관 사진을 찾는다. 첨부 사진이 아예 없는 글(사진 없이
+  // 텍스트만 있는 경우)은 애초에 "대표 사진"이라는 개념이 약하므로 검색을 시도하지
+  // 않는다. 검색으로 찾은 사진은 원래 attachments 목록에 없으므로, 여기서 직접
+  // 삽입해야 실제로 본문에 반영된다. 부족분(shortfall) 슬롯 하나를 대체한 것으로
+  // 취급해 전체 이미지 개수가 카테고리 목표치와 계속 일치하게 한다.
+  //
+  // findExteriorImageViaSearch에 placeId를 넘기면, 글 제목/상호명 텍스트로 웹 전체를
+  // 검색하는 대신 사용자가 Notion 속성(지도 URL)으로 등록한 그 place ID의 실제
+  // 등록 사진(업체가 직접 올린 사진 등)만 후보로 검증한다 — 이미 "이 가게가 맞다"는
+  // 게 지도 URL로 검증돼 있어, 동명의 다른 가게나 무관한 사진이 섞이는 사고를
+  // 막는다(실측 확인: 이름 기반 웹 검색은 낯선 타인의 사진을 가져오는 사고가 있었다).
   if (!leadImageUrl && !allowAiFallback && attachments.length > 0) {
-    // 검색어는 서술형 글 제목이 아니라 실제 확인된 상호명(placeName)을 우선 쓴다 —
-    // "편안하게 먹을 수 있는 오마카세, 미우치 외관"처럼 글 제목을 그대로 검색어에 쓰면
-    // 관련 없는 결과만 나오는 사고가 실측 확인됐다. 지도 링크가 없어 상호명을 못
-    // 구했으면 기존처럼 제목으로 폴백한다.
-    const searched = await findExteriorImageViaSearch(apiKey, placeName ?? post.title)
+    const searched = await findExteriorImageViaSearch(apiKey, placeName ?? post.title, placeId)
     if (searched) {
       leadImageUrl = searched
       leadFromSearch = true
