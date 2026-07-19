@@ -237,12 +237,21 @@ function isNaverMapUrl(url: string): boolean {
 // 제목으로는 검색하지 않는다 — 흔한 상호명(예: "잇키")을 제목만으로 검색하면 완전히 다른
 // 지점(부평→송도)을 잘못 매칭하는 사고가 실측으로 확인됐고, 사용자도 "정확한 URL을
 // 첨부할 것이니 그 URL 기준으로 반영해달라"고 명시적으로 요청했다.
+interface VerifiedPlaceInfo {
+  text: string
+  // 네이버 플레이스에서 실제로 확인된 상호명. 대표(외관) 사진 웹 검색 검색어로 쓰면
+  // "제목 전체 문구 + 외관"(예: "편안하게 먹을 수 있는 오마카세, 미우치 외관")보다
+  // 훨씬 정확한 검색 결과를 얻을 수 있다(실측 확인 — 서술형 글 제목을 그대로 검색어에
+  // 쓰면 관련 없는 결과만 나옴).
+  placeName?: string
+}
+
 async function buildVerifiedPlaceInfoText(
   apiKey: string,
   attachments: LlmAttachment[]
-): Promise<string> {
+): Promise<VerifiedPlaceInfo> {
   const mapLink = attachments.find((a) => a.kind === "link" && isNaverMapUrl(a.url))
-  if (!mapLink) return ""
+  if (!mapLink) return { text: "" }
 
   const placeId = extractNaverPlaceId(mapLink.url)
   let place = placeId ? await fetchNaverPlaceDetail(placeId) : null
@@ -254,10 +263,10 @@ async function buildVerifiedPlaceInfoText(
     }
   }
 
-  if (!place) return ""
+  if (!place) return { text: "" }
 
   const address = place.roadAddress ?? place.address
-  if (!address) return ""
+  if (!address) return { text: "", placeName: place.name }
 
   const lines = [`- 상호명: ${place.name ?? "(확인 안 됨)"}`, `- 주소: ${address}`]
   if (place.telephone) lines.push(`- 전화: ${place.telephone}`)
@@ -276,7 +285,10 @@ async function buildVerifiedPlaceInfoText(
     }
   }
 
-  return `\n\n확인된 매장 정보 (사용자가 첨부한 지도 URL 기준 실제 확인된 사실 - 반드시 이 값과 정확히 일치하게 쓰고, 다른 곳에서 본 정보와 달라도 이 값을 따르세요. "(리뷰 기준, 참고용)"이라고 표시된 항목은 공식 정보가 아니라 방문자 리뷰에서 확인된 내용이니, 상단 정보 요약에 넣을 때 "리뷰에 따르면" 같은 뉘앙스를 살짝 남겨도 됩니다. 그 외 여기 없는 항목은 확인되지 않은 것이니 언급하지 마세요):\n${lines.join("\n")}`
+  return {
+    text: `\n\n확인된 매장 정보 (사용자가 첨부한 지도 URL 기준 실제 확인된 사실 - 반드시 이 값과 정확히 일치하게 쓰고, 다른 곳에서 본 정보와 달라도 이 값을 따르세요. "(리뷰 기준, 참고용)"이라고 표시된 항목은 공식 정보가 아니라 방문자 리뷰에서 확인된 내용이니, 상단 정보 요약에 넣을 때 "리뷰에 따르면" 같은 뉘앙스를 살짝 남겨도 됩니다. 그 외 여기 없는 항목은 확인되지 않은 것이니 언급하지 마세요):\n${lines.join("\n")}`,
+    placeName: place.name,
+  }
 }
 
 /**
@@ -333,18 +345,31 @@ function getVisualParagraphCandidates(paragraphs: string[]): number[] {
   return candidates
 }
 
-// 이미지 슬롯을 삽입할 문단 위치를 고른다. 후보 문단 중 균등한 간격으로 count개를 고른다.
-// 후보가 count보다 적으면(짧은 글) 후보를 순환시켜서라도 정확히 count개를 반환한다 —
-// 그렇지 않으면 호출부(insertImages)에서 뒤쪽 이미지(주로 사용자 첨부 사진)가 배정받을
-// 자리 자체가 없어 조용히 누락되는 사고가 있었다(실측 확인됨). 같은 문단에 마커가 여러 개
-// 붙는 것은 insertImages의 문자열 이어붙이기 특성상 안전하게 처리된다.
-function selectImageInsertionPoints(candidates: number[], count: number): number[] {
-  if (candidates.length === 0 || count <= 0) return []
-  if (candidates.length >= count) {
-    const step = candidates.length / count
-    return Array.from({ length: count }, (_, k) => candidates[Math.floor(k * step)])
+// 문단별 사진 배치 개수를 추적해, 아직 사진이 없는 후보 문단을 우선 고르는 헬퍼를 만든다.
+// "사진 개수만큼 문단을 나눠 쓰라"는 프롬프트 지시로 후보 문단 수가 사진 개수보다 많아지는
+// 경우(실측 확인: 사진 14장에 후보 문단 18개), 고정된 균등 샘플링 방식은 샘플링에서 빠진
+// 후보들에 사진이 아예 안 붙어 "여러 문단이 연달아 사진 없이 이어지는" 사고로 이어졌다.
+// 매 배치마다 실시간으로 가장 적게 쓰인 후보를 골라 전체 candidates 범위에서 빈틈없이
+// 고르게 분산시킨다(사용량이 같으면 읽는 순서상 앞선 후보를 우선해 자연스러운 라운드로빈이 된다).
+function createLeastUsedPicker(candidates: number[]) {
+  const usageCount = new Map<number, number>()
+  return {
+    markUsed(index: number) {
+      usageCount.set(index, (usageCount.get(index) ?? 0) + 1)
+    },
+    pick(): number {
+      let best = candidates[0]
+      let bestUsage = usageCount.get(best) ?? 0
+      for (const index of candidates) {
+        const usage = usageCount.get(index) ?? 0
+        if (usage < bestUsage) {
+          best = index
+          bestUsage = usage
+        }
+      }
+      return best
+    },
   }
-  return Array.from({ length: count }, (_, k) => candidates[k % candidates.length])
 }
 
 // Notion 제목에 흔히 붙는 "[테스트]", "[협찬]" 같은 대괄호 접두사는 이미지 검색 관련성을
@@ -589,7 +614,8 @@ interface InsertImagesResult {
 async function insertImages(
   text: string,
   apiKey: string,
-  post: Post
+  post: Post,
+  placeName?: string
 ): Promise<InsertImagesResult> {
   const attachments = (post.contentAttachments ?? []).filter((a) => a.kind === "image")
   const entry = post.category ? CATEGORY_STYLE_NOTES[post.category] : undefined
@@ -597,6 +623,7 @@ async function insertImages(
 
   const paragraphs = splitLongParagraphs(text.split("\n\n"))
   const candidates = getVisualParagraphCandidates(paragraphs)
+  if (candidates.length === 0) return { text }
 
   // 이미지 목표 개수를 "카테고리 최소값" 또는 "글 길이 기반값" 중 더 큰 값으로 결정
   const minImageCount = entry?.aiImageCount ?? DEFAULT_AI_IMAGE_COUNT
@@ -608,8 +635,7 @@ async function insertImages(
   const totalSlots = attachments.length + shortfall
   if (totalSlots === 0) return { text }
 
-  const points = selectImageInsertionPoints(candidates, totalSlots)
-  if (points.length === 0) return { text }
+  const picker = createLeastUsedPicker(candidates)
 
   const mapLink = (post.contentAttachments ?? []).find(
     (a) => a.kind === "link" && isNaverMapUrl(a.url)
@@ -653,34 +679,31 @@ async function insertImages(
   // 본문에는 전혀 반영되지 않는 사고가 있었다). 부족분(shortfall) 슬롯 하나를 대체한
   // 것으로 취급해 전체 이미지 개수가 카테고리 목표치와 계속 일치하게 한다.
   if (!leadImageUrl && !allowAiFallback && attachments.length > 0) {
-    const searched = await findExteriorImageViaSearch(apiKey, post.title)
+    // 검색어는 서술형 글 제목이 아니라 실제 확인된 상호명(placeName)을 우선 쓴다 —
+    // "편안하게 먹을 수 있는 오마카세, 미우치 외관"처럼 글 제목을 그대로 검색어에 쓰면
+    // 관련 없는 결과만 나오는 사고가 실측 확인됐다. 지도 링크가 없어 상호명을 못
+    // 구했으면 기존처럼 제목으로 폴백한다.
+    const searched = await findExteriorImageViaSearch(apiKey, placeName ?? post.title)
     if (searched) {
       leadImageUrl = searched
       leadFromSearch = true
     }
   }
 
-  if (leadImageUrl && candidates.length > 0) {
+  if (leadImageUrl) {
     appendImageMarker(candidates[0], leadImageUrl)
+    picker.markUsed(candidates[0])
   }
 
   // 나머지 첨부 사진(리드로 뽑히지 않은 것)은 위치 순서가 아니라 캡션 키워드 겹침으로
   // 배치한다 — 균등 간격 배치는 "우니초밥을 얘기하는 문단에 엉뚱한 사진이 붙는" 사고의
   // 원인이었다. 비슷한 캡션의 사진들은 같은 문단으로 몰려 자연히 인접 배치(그룹핑)된다.
   // 매칭이 실패해도(캡션 없음, 겹치는 키워드 없음 등) 첨부 사진은 반드시 결과에 포함해야
-  // 하므로(전부 포함 불변식), 균등 배치로 골라둔 points를 폴백 위치로 쓴다.
+  // 하므로(전부 포함 불변식), 아직 사진이 없는 후보 문단을 우선 고르는 picker를 폴백으로
+  // 쓴다(리드 사진이 이미 candidates[0]을 썼으므로 picker가 자연히 다른 후보를 고른다).
   const matchableEntries = attachments
     .map((attachment, i) => ({ attachment, analysis: analyses[i] }))
     .filter(({ attachment }) => attachment.url !== leadFromAttachment?.url)
-
-  // points[0]은 항상 candidates[0]과 같고, 리드 사진이 첨부 목록에서 나왔다면(leadFromAttachment)
-  // 이미 그 자리에 리드 사진이 꽂혀 있다. matchableEntries는 리드 사진을 제외한 목록이라
-  // 개수가 하나 줄어드는데, 폴백 위치를 points 배열 그대로(0부터) 쓰면 매칭에 실패한 첫
-  // 번째 사진이 points[0](=리드 사진 자리)으로 다시 떨어져 대표 사진과 같은 문단에
-  // 엉뚱한 사진이 겹쳐 삽입되는 사고가 났다(실측 확인됨). 리드 사진이 첨부에서 나온
-  // 경우에만 points[0]을 건너뛴다 — 검색으로 찾은 리드 사진(leadFromSearch)은 애초에
-  // attachments 개수에 포함되지 않으므로 points[0]부터 그대로 써야 슬롯 수가 맞는다.
-  const matchableFallbackPoints = leadFromAttachment && points.length > 1 ? points.slice(1) : points
 
   if (matchableEntries.length > 0) {
     const candidateParagraphs = candidates.map((index) => ({ index, text: paragraphs[index] }))
@@ -689,16 +712,22 @@ async function insertImages(
       candidateParagraphs
     )
     matchableEntries.forEach(({ attachment }, i) => {
-      const paragraphIndex =
-        matchedIndexes[i] ?? matchableFallbackPoints[i % matchableFallbackPoints.length]
+      const paragraphIndex = matchedIndexes[i] ?? picker.pick()
       appendImageMarker(paragraphIndex, attachment.url)
+      picker.markUsed(paragraphIndex)
     })
   }
 
-  // STEP 3: 부족분(검색/AI 생성)으로 채운다 — 검색어/생성 프롬프트 자체가 그 문단 텍스트를
-  // 기반으로 하므로 이미 내용상 매칭되어 있다. 리드 사진을 검색으로 찾았다면(leadFromSearch)
-  // 그만큼 부족분 슬롯을 하나 줄인다(이미 한 자리를 채웠으므로).
-  const shortfallPoints = points.slice(attachments.length + (leadFromSearch ? 1 : 0))
+  // STEP 3: 부족분(검색/AI 생성)으로 채운다 — 아직 사진이 없는 후보 문단을 우선으로 고른다.
+  // 리드 사진을 검색으로 찾았다면(leadFromSearch) 그만큼 부족분 슬롯을 하나 줄인다(이미
+  // 한 자리를 채웠으므로 전체 이미지 개수가 카테고리 목표치와 계속 일치하게 한다).
+  const effectiveShortfall = Math.max(shortfall - (leadFromSearch ? 1 : 0), 0)
+  const shortfallPoints: number[] = []
+  for (let i = 0; i < effectiveShortfall; i++) {
+    const pick = picker.pick()
+    shortfallPoints.push(pick)
+    picker.markUsed(pick)
+  }
   const shortfallImages =
     shortfallPoints.length > 0
       ? await resolveShortfallImages(
@@ -740,10 +769,10 @@ export async function generateNaverDraft(
     throw new Error("LLM_API_KEY가 설정되지 않았습니다.")
   }
 
-  const verifiedPlaceInfoText = await buildVerifiedPlaceInfoText(apiKey, post.contentAttachments ?? [])
+  const verifiedPlaceInfo = await buildVerifiedPlaceInfoText(apiKey, post.contentAttachments ?? [])
 
   const ai = new GoogleGenAI({ apiKey })
-  const contents = buildUserMessage(post, verifiedPlaceInfoText)
+  const contents = buildUserMessage(post, verifiedPlaceInfo.text)
   const config = {
     systemInstruction: buildSystemPrompt(styleGuide, post.category),
     httpOptions: { timeout: TIMEOUT_MS },
@@ -761,7 +790,12 @@ export async function generateNaverDraft(
         throw new Error("LLM 응답에서 텍스트를 추출할 수 없습니다.")
       }
 
-      const { text, leadImageUrl } = await insertImages(response.text, apiKey, post)
+      const { text, leadImageUrl } = await insertImages(
+        response.text,
+        apiKey,
+        post,
+        verifiedPlaceInfo.placeName
+      )
       return { content: text, leadImageUrl }
     } catch (error) {
       if (!shouldTryNextModel(error)) throw error
@@ -773,7 +807,12 @@ export async function generateNaverDraft(
   const groqText = await generateGroqText(config.systemInstruction, contents)
   if (groqText) {
     console.warn("[llm] Gemini 전체 모델 소진 — Groq 텍스트 생성으로 폴백")
-    const { text, leadImageUrl } = await insertImages(groqText, apiKey, post)
+    const { text, leadImageUrl } = await insertImages(
+      groqText,
+      apiKey,
+      post,
+      verifiedPlaceInfo.placeName
+    )
     return { content: text, leadImageUrl }
   }
 

@@ -248,6 +248,34 @@ describe("llm", () => {
       expect(callArgs.contents).toContain("0507-1490-0634")
     })
 
+    it("지도 링크로 실제 상호명이 확인되면 대표 사진 웹 검색어로 글 제목 대신 상호명을 쓴다 (회귀 테스트)", async () => {
+      // "[부천/신중동] 편안하게 먹을 수 있는 오마카세, 미우치" 같은 서술형 제목을 그대로
+      // 검색어에 쓰면("... 미우치 외관") 관련 없는 결과만 나와 대표 사진 검색이 사실상
+      // 항상 실패하는 사고가 실측 확인됐다. 지도 링크로 상호명이 확인되면 그 이름만으로
+      // 깔끔하게 검색해야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      fetchNaverPlaceDetailMock.mockResolvedValueOnce({
+        name: "미우치",
+        address: "경기 부천시 원미구 중동로248번길 52",
+        roadAddress: "경기 부천시 원미구 중동로248번길 52 1층",
+      })
+      searchRealImagesMock.mockResolvedValueOnce([])
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+      })
+
+      await generateNaverDraft({
+        ...mockPost,
+        title: "[부천/신중동] 편안하게 먹을 수 있는 오마카세, 미우치",
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/food.jpg", label: "음식 사진" },
+          { kind: "link", url: "https://map.naver.com/p/entry/place/1377140070" },
+        ],
+      })
+
+      expect(searchRealImagesMock).toHaveBeenCalledWith("미우치 외관", 5)
+    })
+
     it("place ID 조회가 실패하면 URL의 검색어로 지역 검색을 시도한다(제목은 쓰지 않음)", async () => {
       process.env.LLM_API_KEY = "test-key"
       fetchNaverPlaceDetailMock.mockResolvedValueOnce(null)
@@ -980,6 +1008,49 @@ describe("llm", () => {
       expect(uniMarkerIndex).toBeLessThan(dessertParagraphIndex)
       // 티라미수 사진 마커는 디저트 문단 뒤에 위치해야 한다
       expect(tiramisuMarkerIndex).toBeGreaterThan(dessertParagraphIndex)
+    })
+
+    it("캡션 매칭이 전부 실패해도 사진들이 서로 다른 후보 문단에 고르게 분산되고 특정 문단에 몰리지 않는다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: "사진 개수만큼 문단을 나눠 쓰라"는 프롬프트 지시로 후보 문단이
+      // 늘어난 상황에서, 매칭에 실패한 사진들의 폴백 위치가 고정된 균등 샘플링 배열을
+      // 써서 일부 후보 문단은 사진을 아예 못 받고(여러 문단이 연달아 사진 없이 이어짐),
+      // 다른 문단엔 여러 장이 몰리는 문제가 있었다. 후보 문단 수(5)와 첨부 사진 수(5)가
+      // 정확히 같을 때, 매칭이 전부 실패해도(캡션이 문단과 무관) 다섯 사진이 다섯 후보
+      // 문단에 1:1로 정확히 퍼져야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock.mockResolvedValueOnce([]) // 리드 사진 검색도 실패시켜 순수 분산 로직만 검증
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 문단 내용입니다 여기에는 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n두 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n세 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n네 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n다섯 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n마무리 인사.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [1, 2, 3, 4, 5].map((n) => ({
+          kind: "image" as const,
+          url: `https://s3.example.com/${n}.jpg`,
+          label: `전혀 상관없는 잡담 ${n}`,
+        })),
+      })
+
+      const paragraphLabels = ["첫 번째 문단", "두 번째 문단", "세 번째 문단", "네 번째 문단", "다섯 번째 문단"]
+      const paragraphPositions = paragraphLabels.map((label) => result.indexOf(label))
+      const markerPositions = [1, 2, 3, 4, 5].map((n) =>
+        result.indexOf(`https://s3.example.com/${n}.jpg`)
+      )
+
+      // 각 마커가 어느 후보 문단 구간(paragraphPositions[i] ~ paragraphPositions[i+1])에
+      // 속하는지 계산해, 다섯 마커가 각기 다른 구간(0~4)에 하나씩 배정됐는지 확인한다.
+      const sectionOf = (pos: number) => {
+        let section = -1
+        paragraphPositions.forEach((start, i) => {
+          if (pos > start) section = i
+        })
+        return section
+      }
+      const sections = markerPositions.map(sectionOf)
+
+      expect(sections.every((s) => s >= 0)).toBe(true)
+      expect(new Set(sections).size).toBe(5) // 다섯 마커가 다섯 개의 서로 다른 구간에 위치
     })
   })
 })
