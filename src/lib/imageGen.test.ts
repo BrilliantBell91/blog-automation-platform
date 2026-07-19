@@ -2,11 +2,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 import { generateAiImage, verifyImageRelevance, runVisionPromptBatch } from "./imageGen"
 
 const generateContentMock = vi.fn()
-const { fetchMock } = vi.hoisted(() => ({
+const { fetchMock, generateGroqVisionTextMock } = vi.hoisted(() => ({
   fetchMock: vi.fn(),
+  // 기본값 null: Groq 키가 없는(기본) 상태를 흉내내, 명시적으로 mockResolvedValueOnce하지
+  // 않는 한 항상 기존 Gemini 전용 동작(unknown/null)을 그대로 유지해야 한다.
+  generateGroqVisionTextMock: vi.fn().mockResolvedValue(null),
 }))
 
 vi.stubGlobal("fetch", fetchMock)
+
+vi.mock("./groqClient", () => ({
+  generateGroqVisionText: generateGroqVisionTextMock,
+}))
 
 vi.mock("@google/genai", () => {
   class ApiError extends Error {
@@ -29,6 +36,7 @@ describe("imageGen", () => {
   beforeEach(() => {
     fetchMock.mockReset()
     generateContentMock.mockReset()
+    generateGroqVisionTextMock.mockReset().mockResolvedValue(null)
   })
 
   // 이미지 생성은 Gemini를 우선 시도한다(429/503은 withRetry로 재시도). Gemini가
@@ -193,7 +201,7 @@ describe("imageGen", () => {
       expect(generateContentMock).toHaveBeenCalledTimes(2)
     })
 
-    it("모든 검증 모델이 할당량 소진이면 unknown을 반환한다", async () => {
+    it("모든 검증 모델이 할당량 소진이고 Groq도 null이면 unknown을 반환한다", async () => {
       mockImageDownloadOk()
       const { ApiError } = await import("@google/genai")
       generateContentMock.mockRejectedValue(
@@ -206,6 +214,34 @@ describe("imageGen", () => {
       // VERIFY_MODEL_FALLBACK_CHAIN 3개 모델(gemini-2.0-flash는 limit:0 확인되어 제외됨),
       // 모델당 1회씩만 시도(재시도 없음) = 3회
       expect(generateContentMock).toHaveBeenCalledTimes(3)
+      expect(generateGroqVisionTextMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("모든 검증 모델이 할당량 소진이어도 Groq가 '예'를 반환하면 relevant로 매핑한다", async () => {
+      mockImageDownloadOk()
+      const { ApiError } = await import("@google/genai")
+      generateContentMock.mockRejectedValue(
+        new ApiError({ message: "Too Many Requests", status: 429 })
+      )
+      generateGroqVisionTextMock.mockResolvedValueOnce("예")
+
+      const result = await verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
+
+      expect(result).toBe("relevant")
+      expect(generateGroqVisionTextMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("모든 검증 모델이 할당량 소진이어도 Groq가 '아니오'를 반환하면 irrelevant로 매핑한다", async () => {
+      mockImageDownloadOk()
+      const { ApiError } = await import("@google/genai")
+      generateContentMock.mockRejectedValue(
+        new ApiError({ message: "Too Many Requests", status: 429 })
+      )
+      generateGroqVisionTextMock.mockResolvedValueOnce("아니오")
+
+      const result = await verifyImageRelevance("test-key", "https://example.com/a.jpg", "설명")
+
+      expect(result).toBe("irrelevant")
     })
   })
 
@@ -263,6 +299,48 @@ describe("imageGen", () => {
       expect(text).toBeNull()
       expect(successIndexes).toEqual([])
       expect(generateContentMock).not.toHaveBeenCalled()
+    })
+
+    it("Gemini 비전 모델이 전부 할당량 소진이면 Groq 비전 응답으로 대체한다", async () => {
+      mockImageDownloadOk()
+      mockImageDownloadOk()
+      const { ApiError } = await import("@google/genai")
+      generateContentMock.mockRejectedValue(
+        new ApiError({ message: "Too Many Requests", status: 429 })
+      )
+      generateGroqVisionTextMock.mockResolvedValueOnce("1) a | 예\n2) b | 아니오")
+
+      const { successIndexes, text } = await runVisionPromptBatch(
+        "test-key",
+        ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+        "분석해줘"
+      )
+
+      expect(text).toBe("1) a | 예\n2) b | 아니오")
+      expect(successIndexes).toEqual([0, 1])
+      // VERIFY_MODEL_FALLBACK_CHAIN 3개 모델 전부 시도 후 Groq로 폴백
+      expect(generateContentMock).toHaveBeenCalledTimes(3)
+      expect(generateGroqVisionTextMock).toHaveBeenCalledTimes(1)
+      const [images, promptText] = generateGroqVisionTextMock.mock.calls[0]
+      expect(images).toHaveLength(2)
+      expect(promptText).toBe("분석해줘")
+    })
+
+    it("Gemini와 Groq 비전 모두 실패하면 null을 반환한다", async () => {
+      mockImageDownloadOk()
+      const { ApiError } = await import("@google/genai")
+      generateContentMock.mockRejectedValue(
+        new ApiError({ message: "Too Many Requests", status: 429 })
+      )
+
+      const { text } = await runVisionPromptBatch(
+        "test-key",
+        ["https://example.com/1.jpg"],
+        "분석해줘"
+      )
+
+      expect(text).toBeNull()
+      expect(generateGroqVisionTextMock).toHaveBeenCalledTimes(1)
     })
   })
 })

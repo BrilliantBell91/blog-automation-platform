@@ -13,6 +13,7 @@ import { inferFacilityFromReviews } from "./naverReviewSearch"
 import { findExteriorImageViaSearch } from "./thumbnail"
 import { extractLinkLabel } from "./naverDraftParser"
 import { withRetry, shouldTryNextModel } from "./geminiRetry"
+import { generateGroqText } from "./groqClient"
 
 // 무료 티어 할당량은 모델별로 독립적으로 차감된다(실측 확인됨: gemini-3.5-flash가
 // 하루 한도로 막혀도 다른 모델은 정상 동작). 앞쪽부터 시도하고 할당량 소진(429)이나
@@ -757,6 +758,13 @@ export async function generateNaverDraft(
       console.warn(`[llm] ${model} 사용 불가(할당량 소진/미지원) — 다음 모델로 전환`, error)
       lastError = error
     }
+  }
+
+  const groqText = await generateGroqText(config.systemInstruction, contents)
+  if (groqText) {
+    console.warn("[llm] Gemini 전체 모델 소진 — Groq 텍스트 생성으로 폴백")
+    const { text, leadImageUrl } = await insertImages(groqText, apiKey, post)
+    return { content: text, leadImageUrl }
   }
 
   throw lastError

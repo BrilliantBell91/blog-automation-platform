@@ -4,6 +4,7 @@
 
 import { GoogleGenAI } from "@google/genai"
 import { withRetry, shouldTryNextModel } from "./geminiRetry"
+import { generateGroqVisionText } from "./groqClient"
 
 const IMAGE_MODEL = "gemini-2.5-flash-image"
 
@@ -147,6 +148,13 @@ async function callVisionModel(apiKey: string, parts: VisionPart[]): Promise<str
       console.warn(`[imageGen] ${model} 사용 불가(할당량 소진/미지원) — 다음 모델로 전환`, error)
     }
   }
+  const groqImages = parts
+    .filter((p): p is Extract<VisionPart, { inlineData: unknown }> => "inlineData" in p)
+    .map((p) => ({ mimeType: p.inlineData.mimeType, data: p.inlineData.data }))
+  const promptText = parts.find((p): p is { text: string } => "text" in p)?.text ?? ""
+  const groqResult = await generateGroqVisionText(groqImages, promptText)
+  if (groqResult !== null) return groqResult
+
   console.warn("[imageGen] 비전 프롬프트 호출 - 모든 모델 할당량 소진")
   return null
 }
@@ -285,6 +293,14 @@ export async function verifyImageRelevance(
       console.warn(`[imageGen] ${model} 사용 불가(할당량 소진/미지원) — 다음 모델로 전환`, error)
       lastError = error
     }
+  }
+
+  const groqAnswer = await generateGroqVisionText(
+    [{ mimeType, data: base64 }],
+    buildVerifyPrompt(description, source)
+  )
+  if (groqAnswer !== null) {
+    return groqAnswer.trim().startsWith("예") ? "relevant" : "irrelevant"
   }
 
   console.warn("[imageGen] 이미지 관련성 검증 - 모든 모델 할당량 소진, 확인 불가로 처리", lastError)

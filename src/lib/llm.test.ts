@@ -11,6 +11,7 @@ const {
   fetchNaverPlaceDetailMock,
   fetchNaverPlacePhotosMock,
   fetchMock,
+  generateGroqTextMock,
 } = vi.hoisted(() => ({
   searchRealImagesMock: vi.fn().mockResolvedValue([]),
   searchGoogleImagesMock: vi.fn().mockResolvedValue([]),
@@ -21,6 +22,9 @@ const {
   // verifyImageRelevanceMock이 실제 구현을 대체하므로 원래는 fetch가 호출될 일이 없지만,
   // 혹시 놓친 경로가 실제 네트워크를 타지 않도록 안전망으로 항상 실패시켜둔다.
   fetchMock: vi.fn().mockResolvedValue({ ok: false }),
+  // 기본값 null: Gemini 체인이 전부 실패해도 Groq 키가 없으면(기본 상태) 기존과 동일하게
+  // lastError를 던져야 하므로, 명시적으로 mockResolvedValueOnce하지 않는 한 항상 null.
+  generateGroqTextMock: vi.fn().mockResolvedValue(null),
 }))
 
 vi.stubGlobal("fetch", fetchMock)
@@ -32,6 +36,10 @@ vi.mock("./imageSearch", () => ({
 
 vi.mock("./naverLocalSearch", () => ({
   searchNaverPlace: searchNaverPlaceMock,
+}))
+
+vi.mock("./groqClient", () => ({
+  generateGroqText: generateGroqTextMock,
 }))
 
 // extractNaverPlaceId는 실제 구현(순수 정규식 파싱)을 그대로 쓰고, fetchNaverPlaceDetail/
@@ -114,6 +122,7 @@ describe("llm", () => {
     fetchNaverPlaceDetailMock.mockReset().mockResolvedValue(null)
     fetchNaverPlacePhotosMock.mockReset().mockResolvedValue([])
     fetchMock.mockReset().mockResolvedValue({ ok: false })
+    generateGroqTextMock.mockReset().mockResolvedValue(null)
   })
 
   describe("generateNaverDraft", () => {
@@ -355,6 +364,41 @@ describe("llm", () => {
       // 모델마다 최초 시도 + GEMINI_RATE_LIMIT.MAX_RETRIES(3) 재시도 = 4회,
       // 모든 모델이 계속 429면 체인 전체를 소진하고 마지막 에러를 전파한다.
       expect(generateContentMock).toHaveBeenCalledTimes(4 * MODEL_FALLBACK_CHAIN.length)
+      // Groq 키가 없는(기본) 상태이므로 Groq 시도도 null로 끝나고 그대로 에러를 던진다.
+      expect(generateGroqTextMock).toHaveBeenCalledTimes(1)
+      vi.useRealTimers()
+    })
+
+    it("Gemini 모델이 전부 소진되어도 Groq가 텍스트를 반환하면 그 결과로 초안을 생성한다", async () => {
+      vi.useFakeTimers()
+      process.env.LLM_API_KEY = "test-key"
+      const { ApiError } = await import("@google/genai")
+      generateContentMock.mockRejectedValue(new ApiError({ message: "Too Many Requests", status: 429 }))
+      generateGroqTextMock.mockResolvedValueOnce("Groq가 생성한 초안 내용")
+
+      const promise = generateNaverDraft(mockPost)
+      await vi.runAllTimersAsync()
+      const { content: result } = await promise
+
+      expect(result).toBe("Groq가 생성한 초안 내용")
+      expect(generateContentMock).toHaveBeenCalledTimes(4 * MODEL_FALLBACK_CHAIN.length)
+      expect(generateGroqTextMock).toHaveBeenCalledTimes(1)
+      vi.useRealTimers()
+    })
+
+    it("Gemini 모델과 Groq 모두 실패하면(Groq도 null) 기존과 동일하게 마지막 에러를 던진다", async () => {
+      vi.useFakeTimers()
+      process.env.LLM_API_KEY = "test-key"
+      const { ApiError } = await import("@google/genai")
+      generateContentMock.mockRejectedValue(new ApiError({ message: "Too Many Requests", status: 429 }))
+      generateGroqTextMock.mockResolvedValueOnce(null)
+
+      const promise = generateNaverDraft(mockPost)
+      const assertion = expect(promise).rejects.toMatchObject({ status: 429 })
+      await vi.runAllTimersAsync()
+      await assertion
+
+      expect(generateGroqTextMock).toHaveBeenCalledTimes(1)
       vi.useRealTimers()
     })
 
