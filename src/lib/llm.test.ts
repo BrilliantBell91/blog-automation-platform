@@ -10,6 +10,7 @@ const {
   searchNaverPlaceMock,
   fetchNaverPlaceDetailMock,
   fetchNaverPlacePhotosMock,
+  fetchNaverPlaceAiCategoryPhotosMock,
   inferFacilityFromReviewsMock,
   fetchMock,
   generateGroqTextMock,
@@ -21,6 +22,12 @@ const {
   searchNaverPlaceMock: vi.fn().mockResolvedValue(null),
   fetchNaverPlaceDetailMock: vi.fn().mockResolvedValue(null),
   fetchNaverPlacePhotosMock: vi.fn().mockResolvedValue([]),
+  // 이 파일은 findExteriorImageViaSearch/findMenuImageViaSearch(thumbnail.ts)를 실제
+  // 구현 그대로 거치는데, 그 안에서 네이버 AI 분류 사진(fetchNaverPlaceAiCategoryPhotos)을
+  // 최우선으로 조회한다. 목킹하지 않으면 실제 구현이 전역 fetch 스텁을 그대로 호출해,
+  // 이 파일 곳곳의 fetchMock.mockResolvedValueOnce 순서(이미지 다운로드 검증용)를
+  // 예기치 않게 하나씩 밀어버리는 사고로 이어진다 — 기본값 빈 배열로 완전히 격리한다.
+  fetchNaverPlaceAiCategoryPhotosMock: vi.fn().mockResolvedValue([]),
   inferFacilityFromReviewsMock: vi.fn().mockResolvedValue(null),
   // verifyImageRelevanceMock이 실제 구현을 대체하므로 원래는 fetch가 호출될 일이 없지만,
   // 혹시 놓친 경로가 실제 네트워크를 타지 않도록 안전망으로 항상 실패시켜둔다.
@@ -63,6 +70,7 @@ vi.mock("./naverPlaceDetail", async (importOriginal) => {
     ...actual,
     fetchNaverPlaceDetail: fetchNaverPlaceDetailMock,
     fetchNaverPlacePhotos: fetchNaverPlacePhotosMock,
+    fetchNaverPlaceAiCategoryPhotos: fetchNaverPlaceAiCategoryPhotosMock,
   }
 })
 
@@ -134,6 +142,7 @@ describe("llm", () => {
     searchNaverPlaceMock.mockReset().mockResolvedValue(null)
     fetchNaverPlaceDetailMock.mockReset().mockResolvedValue(null)
     fetchNaverPlacePhotosMock.mockReset().mockResolvedValue([])
+    fetchNaverPlaceAiCategoryPhotosMock.mockReset().mockResolvedValue([])
     inferFacilityFromReviewsMock.mockReset().mockResolvedValue(null)
     fetchMock.mockReset().mockResolvedValue({ ok: false })
     generateGroqTextMock.mockReset().mockResolvedValue(null)
@@ -987,7 +996,7 @@ describe("llm", () => {
       expect(result).not.toContain("[사진 원본") // 검색 실패한 이미지는 삽입되지 않음
     })
 
-    it("라벨에 외관이 명시된 첨부 사진은 첫 번째 후보 문단에 강제 배치되고 leadImageUrl로 반환된다", async () => {
+    it("라벨에 외관이 명시된 첨부 사진은 첫 본문 문단보다 앞에 독립 문단으로 배치되고 leadImageUrl로 반환된다", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({
         text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
@@ -995,6 +1004,9 @@ describe("llm", () => {
 
       // 라벨이 의미 있는 텍스트("가게 외관")면 비전 호출 없이 라벨 자체로 외관 여부를
       // 판정하므로(EXTERIOR_LABEL_HINT), 이 테스트는 추가 vision mock 없이 결정론적으로 통과한다.
+      // 대표(외관) 사진은 "메뉴판 ▼" 같은 소제목보다 먼저 나와야 자연스러우므로(실측 확인된
+      // "메뉴판 아래 외관사진" 순서 오류), 본문 후보 문단에 끼어드는 대신 인사말 바로 다음
+      // 독립된 문단으로 삽입된다 — 즉 첫 본문 문단보다도 앞에 위치해야 한다.
       const { content: result, leadImageUrl } = await generateNaverDraft({
         ...mockPost,
         contentAttachments: [
@@ -1005,11 +1017,13 @@ describe("llm", () => {
       const markerIndex = result.indexOf(
         "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://s3.example.com/exterior.jpg]"
       )
+      const firstParagraphIndex = result.indexOf("첫 번째 이야기입니다")
       const secondParagraphIndex = result.indexOf("두 번째 이야기입니다")
 
       expect(leadImageUrl).toBe("https://s3.example.com/exterior.jpg")
       expect(markerIndex).toBeGreaterThan(-1)
-      expect(markerIndex).toBeLessThan(secondParagraphIndex) // 첫 번째 후보 문단(=두 번째 문단) 뒤에 붙음
+      expect(markerIndex).toBeLessThan(firstParagraphIndex) // 첫 본문 문단보다 앞
+      expect(markerIndex).toBeLessThan(secondParagraphIndex)
     })
 
     it("첨부 사진 중 메뉴판으로 판별된 사진은 '메뉴 ▼' 소제목 바로 다음 문단에 강제 배치된다 (회귀 테스트)", async () => {
@@ -1116,18 +1130,17 @@ describe("llm", () => {
       expect(searchRealImagesMock).toHaveBeenCalledWith("테스트 포스트 외관", 5)
     })
 
-    it("리드로 뽑힌 첨부 사진이 있을 때, 캡션 매칭에 실패한 다른 첨부 사진은 리드 사진과 같은 문단에 겹치지 않는다 (회귀 테스트)", async () => {
+    it("리드로 뽑힌 첨부 사진은 별도 문단으로 빠지므로, 캡션 매칭에 실패한 다른 첨부 사진이 그 자리와 겹치지 않는다 (회귀 테스트)", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({
         text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
       })
 
-      // exterior.jpg는 라벨에 "외관"이 있어 결정론적으로 leadImageUrl이 된다(candidates[0]=
-      // 첫 번째 후보 문단에 배치). random.jpg는 캡션이 어느 문단과도 겹치지 않아 매칭에
-      // 실패하고 폴백 위치로 떨어지는데, points[0](=리드 사진 자리)로 되돌아가 리드 사진과
-      // 같은 문단에 겹쳐 삽입되던 버그가 있었다 — "대표 사진 옆에 엉뚱한 사진이 같이
-      // 붙는다"는 재발 신고의 원인이었다. 수정 후에는 리드 사진이 이미 쓴 자리를 건너뛰고
-      // 다음 후보 문단(=두 번째 후보 문단)에 배치돼야 한다.
+      // exterior.jpg는 라벨에 "외관"이 있어 결정론적으로 leadImageUrl이 되고, 본문 후보
+      // 문단이 아니라 인사말 바로 다음 독립된 문단으로 삽입된다(메뉴판 등 소제목보다
+      // 먼저 나와야 하므로). random.jpg는 캡션이 어느 문단과도 겹치지 않아 매칭에
+      // 실패하고 picker 폴백으로 첫 번째 본문 후보 문단에 떨어지는데, 리드 사진이 더 이상
+      // 그 문단을 점유하지 않으므로 겹칠 걱정 없이 배치된다.
       const { content: result, leadImageUrl } = await generateNaverDraft({
         ...mockPost,
         contentAttachments: [
@@ -1136,26 +1149,24 @@ describe("llm", () => {
         ],
       })
 
+      const greetingIndex = result.indexOf("안녕하세요.")
       const firstParagraphIndex = result.indexOf("첫 번째 이야기입니다")
-      const secondParagraphIndex = result.indexOf("두 번째 이야기입니다")
       const exteriorMarkerIndex = result.indexOf("https://s3.example.com/exterior.jpg")
       const randomMarkerIndex = result.indexOf("https://s3.example.com/random.jpg")
 
       expect(leadImageUrl).toBe("https://s3.example.com/exterior.jpg")
-      // 리드 사진은 첫 번째 후보 문단(첫 번째 이야기와 두 번째 이야기 문단 사이)에 위치
-      expect(exteriorMarkerIndex).toBeGreaterThan(firstParagraphIndex)
-      expect(exteriorMarkerIndex).toBeLessThan(secondParagraphIndex)
-      // 매칭 실패한 사진은 리드 사진과 같은 문단(첫 번째 후보)이 아니라 두 번째 후보 문단
-      // 뒤에 위치해야 한다 — 즉 "두 번째 이야기입니다" 문단 텍스트보다 뒤에 나와야 한다.
-      expect(randomMarkerIndex).toBeGreaterThan(secondParagraphIndex)
+      // 리드 사진은 인사말 다음, 첫 본문 문단보다 앞에 독립 문단으로 위치
+      expect(exteriorMarkerIndex).toBeGreaterThan(greetingIndex)
+      expect(exteriorMarkerIndex).toBeLessThan(firstParagraphIndex)
+      // 매칭 실패한 사진도 전부 포함 불변식에 따라 본문 어딘가에 반드시 포함된다
+      expect(randomMarkerIndex).toBeGreaterThan(-1)
     })
 
-    it("다른 첨부 사진의 캡션이 리드 사진 문단과 진짜로 겹쳐도, 매칭 후보에서 리드 문단이 미리 제외돼 다른 문단으로 배치된다 (회귀 테스트)", async () => {
-      // 리드 사진이 이미 candidates[0]을 차지했는데, 다른 첨부 사진의 캡션이 우연히
-      // candidates[0] 문단 텍스트와 키워드가 겹치면(매칭 실패가 아니라 진짜 매칭 성공),
-      // 소프트 페널티만으로는 여전히 리드 문단이 선택될 수 있었다. 매칭 후보 목록
-      // 자체에서 리드가 쓴 문단을 미리 빼야, 진짜 매칭이 성공하는 경우에도 리드 자리와
-      // 겹치지 않는다.
+    it("다른 첨부 사진의 캡션이 실제로 겹치는 본문 문단에는, 더 이상 리드 사진과 충돌 없이 그대로 매칭된다 (회귀 테스트)", async () => {
+      // 리드 사진이 더 이상 본문 후보 문단(candidates)을 점유하지 않고 별도 문단으로
+      // 빠지므로, 다른 첨부 사진의 캡션이 진짜로 어떤 본문 문단과 겹치면(매칭 성공)
+      // 그 문단에 그대로 배치돼야 한다 — 예전에는 리드가 candidates[0]을 차지해 이
+      // 문단을 강제로 피해야 했지만 이제 그럴 필요가 없다.
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({
         text: "안녕하세요.\n\n오늘은 우니초밥 먹으러 왔어요 정말 맛있었고 아주 신선하고 좋았습니다.\n\n디저트로 아이스크림도 나왔는데 부드럽고 좋았습니다.\n\n마무리 인사.",
@@ -1165,8 +1176,6 @@ describe("llm", () => {
         ...mockPost,
         contentAttachments: [
           { kind: "image", url: "https://s3.example.com/exterior.jpg", label: "가게 외관" },
-          // 캡션이 "우니초밥"을 포함해 리드 사진이 이미 차지한 candidates[0](우니초밥
-          // 문단)과 진짜로 키워드가 겹친다.
           { kind: "image", url: "https://s3.example.com/uni.jpg", label: "우니초밥 클로즈업" },
         ],
       })
@@ -1177,10 +1186,11 @@ describe("llm", () => {
       const uniMarkerIndex = result.indexOf("https://s3.example.com/uni.jpg")
 
       expect(leadImageUrl).toBe("https://s3.example.com/exterior.jpg")
-      expect(exteriorMarkerIndex).toBeGreaterThan(uniParagraphIndex)
-      expect(exteriorMarkerIndex).toBeLessThan(dessertParagraphIndex)
-      // 우니초밥 사진은 캡션이 진짜로 겹쳐도 리드 문단이 아니라 다음 문단(디저트) 뒤로 밀린다
-      expect(uniMarkerIndex).toBeGreaterThan(dessertParagraphIndex)
+      // 리드 사진은 우니초밥 문단보다도 앞(인사말 바로 다음)에 위치
+      expect(exteriorMarkerIndex).toBeLessThan(uniParagraphIndex)
+      // 우니초밥 사진은 캡션이 진짜로 겹치는 그 문단에 정확히 매칭된다
+      expect(uniMarkerIndex).toBeGreaterThan(uniParagraphIndex)
+      expect(uniMarkerIndex).toBeLessThan(dessertParagraphIndex)
     })
 
     it("첨부 사진은 위치 순서가 아니라 캡션 키워드가 겹치는 문단에 매칭된다", async () => {

@@ -373,6 +373,19 @@ function findCandidateAfterHeading(
 
 const MENU_HEADING_PATTERN = /^메뉴(판)?\s*▼?$/
 
+// 대표(외관) 사진은 "메뉴판 ▼" 같은 소제목보다 먼저 나와야 자연스러운데, 기존에는 그냥
+// "문서 전체에서 가장 앞의 이미지 후보 문단"에 이어붙였다. 맛집 카테고리 프롬프트는
+// 본문을 "메뉴판 ▼" 소제목으로 먼저 시작하도록 지시하고, 서두/매장정보 인용구는 이미지
+// 후보에서 제외되므로, "가장 앞의 후보 문단"이 실제로는 항상 "메뉴판 ▼" 바로 다음
+// 문단이 되어 "메뉴판 아래 외관사진" 순서 오류로 이어졌다(실측 확인). 대표 사진은 후보
+// 목록에 의존하지 않고, 인사말 + 매장정보 인용구 블록 바로 다음(모든 소제목보다 앞)에
+// 독립된 문단으로 강제 삽입한다.
+function findLeadInsertionIndex(paragraphs: string[]): number {
+  let idx = 1
+  while (idx < paragraphs.length && paragraphs[idx].trim().startsWith(">")) idx++
+  return idx
+}
+
 // 문단별 사진 배치 개수를 추적해, 아직 사진이 없는 후보 문단을 우선 고르는 헬퍼를 만든다.
 // "사진 개수만큼 문단을 나눠 쓰라"는 프롬프트 지시로 후보 문단 수가 사진 개수보다 많아지는
 // 경우(실측 확인: 사진 14장에 후보 문단 18개), 고정된 균등 샘플링 방식은 샘플링에서 빠진
@@ -649,35 +662,12 @@ async function insertImages(
   const entry = post.category ? CATEGORY_STYLE_NOTES[post.category] : undefined
   const allowAiFallback = entry?.allowAiFallback ?? DEFAULT_ALLOW_AI_FALLBACK
 
-  const paragraphs = splitLongParagraphs(text.split("\n\n"))
-  const candidates = getVisualParagraphCandidates(paragraphs)
-  if (candidates.length === 0) return { text }
-
-  // 이미지 목표 개수를 "카테고리 최소값" 또는 "글 길이 기반값" 중 더 큰 값으로 결정
-  const minImageCount = entry?.aiImageCount ?? DEFAULT_AI_IMAGE_COUNT
-  const imagesPerParagraphs = entry?.imagesPerParagraphs ?? 5
-  const lengthBasedCount = Math.ceil(candidates.length / imagesPerParagraphs)
-  const targetCount = Math.max(minImageCount, lengthBasedCount)
-
-  const shortfall = Math.max(targetCount - attachments.length, 0)
-  const totalSlots = attachments.length + shortfall
-  if (totalSlots === 0) return { text }
-
-  const picker = createLeastUsedPicker(candidates)
+  let paragraphs = splitLongParagraphs(text.split("\n\n"))
 
   const mapLink = (post.contentAttachments ?? []).find(
     (a) => a.kind === "link" && isNaverMapUrl(a.url)
   )
   const placeId = mapLink ? extractNaverPlaceId(mapLink.url) : null
-
-  const result = [...paragraphs]
-  // 배열에 새 원소를 끼워넣는 대신 대상 문단 뒤에 마커를 이어붙이므로 인덱스가 밀리지 않는다.
-  // 같은 문단에 마커가 여러 개 이어붙는 것도 안전하게 처리된다(비슷한 사진끼리 묶이는 효과).
-  const appendImageMarker = (paragraphIndex: number, imageUrl: string) => {
-    result[paragraphIndex] =
-      result[paragraphIndex] +
-      `\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${imageUrl}]`
-  }
 
   // STEP 1(최우선): 첨부 사진을 배치 비전 호출로 분석(캡션+외관 여부, 여러 장을 한 번의
   // 호출로 묶음). 사용자의 실제 사진을 다루는 이 작업이 가장 중요하므로, 무료 티어
@@ -719,9 +709,41 @@ async function insertImages(
     }
   }
 
+  // 대표(외관) 사진은 이미지 후보 계산보다 먼저, 인사말+매장정보 블록 바로 다음(모든
+  // 소제목보다 앞)에 독립된 문단으로 끼워넣는다. 뒤이어 계산하는 candidates는 이 삽입이
+  // 반영된 배열 기준이라, 이 문단은 마커만 있는 문단이라 후보에서 자동 제외되고(
+  // getVisualParagraphCandidates의 마커 검사) 이후 인덱스도 이 삽입 이후 값으로 일관된다.
   if (leadImageUrl) {
-    appendImageMarker(candidates[0], leadImageUrl)
-    picker.markUsed(candidates[0])
+    const insertAt = findLeadInsertionIndex(paragraphs)
+    paragraphs = [
+      ...paragraphs.slice(0, insertAt),
+      `[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${leadImageUrl}]`,
+      ...paragraphs.slice(insertAt),
+    ]
+  }
+
+  const candidates = getVisualParagraphCandidates(paragraphs)
+  if (candidates.length === 0) return { text: paragraphs.join("\n\n"), leadImageUrl }
+
+  // 이미지 목표 개수를 "카테고리 최소값" 또는 "글 길이 기반값" 중 더 큰 값으로 결정
+  const minImageCount = entry?.aiImageCount ?? DEFAULT_AI_IMAGE_COUNT
+  const imagesPerParagraphs = entry?.imagesPerParagraphs ?? 5
+  const lengthBasedCount = Math.ceil(candidates.length / imagesPerParagraphs)
+  const targetCount = Math.max(minImageCount, lengthBasedCount)
+
+  const shortfall = Math.max(targetCount - attachments.length, 0)
+  const totalSlots = attachments.length + shortfall
+  if (totalSlots === 0) return { text: paragraphs.join("\n\n"), leadImageUrl }
+
+  const picker = createLeastUsedPicker(candidates)
+
+  const result = [...paragraphs]
+  // 배열에 새 원소를 끼워넣는 대신 대상 문단 뒤에 마커를 이어붙이므로 인덱스가 밀리지 않는다.
+  // 같은 문단에 마커가 여러 개 이어붙는 것도 안전하게 처리된다(비슷한 사진끼리 묶이는 효과).
+  const appendImageMarker = (paragraphIndex: number, imageUrl: string) => {
+    result[paragraphIndex] =
+      result[paragraphIndex] +
+      `\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${imageUrl}]`
   }
 
   // 메뉴판 사진도 대표(외관) 사진과 동일한 원칙으로 반드시 포함시킨다(사용자 요청) —
@@ -755,9 +777,10 @@ async function insertImages(
   // 겹침으로 배치한다 — 균등 간격 배치는 "우니초밥을 얘기하는 문단에 엉뚱한 사진이
   // 붙는" 사고의 원인이었다. 매칭이 실패해도(캡션 없음, 겹치는 키워드 없음 등) 첨부
   // 사진은 반드시 결과에 포함해야 하므로(전부 포함 불변식), 아직 사진이 없는 후보
-  // 문단을 우선 고르는 picker를 폴백으로 쓴다. 리드/메뉴판 사진이 이미 문단을 썼으므로,
-  // 매칭 후보 목록에서도 그 문단들을 미리 제외해 매칭 단계가 그 자리를 다시 차지하지
-  // 않게 한다.
+  // 문단을 우선 고르는 picker를 폴백으로 쓴다. 메뉴판 사진이 이미 문단을 썼으므로,
+  // 매칭 후보 목록에서도 그 문단을 미리 제외해 매칭 단계가 그 자리를 다시 차지하지
+  // 않게 한다(리드 사진은 이제 별도 문단으로 삽입되어 애초에 candidates에 없으므로
+  // 별도 제외가 필요 없다).
   const matchableEntries = attachments
     .map((attachment, i) => ({ attachment, analysis: analyses[i] }))
     .filter(
@@ -767,9 +790,7 @@ async function insertImages(
 
   if (matchableEntries.length > 0) {
     const reservedParagraphs = new Set(
-      [leadImageUrl ? candidates[0] : undefined, menuParagraphIndex].filter(
-        (v): v is number => v !== undefined
-      )
+      [menuParagraphIndex].filter((v): v is number => v !== undefined)
     )
     const candidateParagraphs = candidates
       .filter((index) => !reservedParagraphs.has(index))

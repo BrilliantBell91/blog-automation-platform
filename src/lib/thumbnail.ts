@@ -7,7 +7,11 @@
 
 import { runVisionPrompt } from "./imageGen"
 import { searchRealImages, searchGoogleImages } from "./imageSearch"
-import { fetchNaverPlacePhotos } from "./naverPlaceDetail"
+import {
+  fetchNaverPlacePhotos,
+  fetchNaverPlaceAiCategoryPhotos,
+  type NaverPlaceAiPhotoCategory,
+} from "./naverPlaceDetail"
 
 const EXTERIOR_CLASSIFY_PROMPT = `이 사진이 가게/매장/장소의 외관(건물 정면, 간판이 보이는 입구, 외부 전경) 사진인지 판단해주세요.
 음식, 실내 인테리어, 메뉴판, 사람 얼굴 클로즈업 등은 외관 사진이 아닙니다.
@@ -44,11 +48,18 @@ async function findCategoryImage(
   searchQuery: string,
   placeId: string | null | undefined,
   classifyPrompt: string,
-  fallbackToWebSearch: boolean
+  fallbackToWebSearch: boolean,
+  aiCategory: NaverPlaceAiPhotoCategory
 ): Promise<string | null> {
   if (!apiKey) return null
 
   if (placeId) {
+    // 네이버 자체 AI가 이미 "외부"/"메뉴판" 등으로 분류해둔 사진을 최우선으로 쓴다 —
+    // 이 place 전용 사진이고 우리 쪽 비전 분류를 거치지 않아도 될 만큼 신뢰도가 높다고
+    // 실측으로 확인됐다(자세한 배경은 fetchNaverPlaceAiCategoryPhotos 주석 참고).
+    const aiPhotos = await fetchNaverPlaceAiCategoryPhotos(placeId, aiCategory, MAX_CANDIDATES_TO_VERIFY)
+    if (aiPhotos.length > 0) return aiPhotos[0]
+
     const verifiedPhotos = await fetchNaverPlacePhotos(placeId, MAX_CANDIDATES_TO_VERIFY)
     for (const candidate of verifiedPhotos) {
       if (await classifyPhoto(apiKey, candidate, classifyPrompt)) return candidate
@@ -81,7 +92,7 @@ export async function findExteriorImageViaSearch(
   placeId?: string | null
 ): Promise<string | null> {
   const query = `${cleanTitleForSearch(postTitle)} 외관`
-  return findCategoryImage(apiKey, query, placeId, EXTERIOR_CLASSIFY_PROMPT, false)
+  return findCategoryImage(apiKey, query, placeId, EXTERIOR_CLASSIFY_PROMPT, false, "EXTERIOR")
 }
 
 /**
@@ -97,5 +108,5 @@ export async function findMenuImageViaSearch(
   placeId?: string | null
 ): Promise<string | null> {
   const query = `${cleanTitleForSearch(postTitle)} 메뉴판`
-  return findCategoryImage(apiKey, query, placeId, MENU_CLASSIFY_PROMPT, true)
+  return findCategoryImage(apiKey, query, placeId, MENU_CLASSIFY_PROMPT, true, "MENU")
 }

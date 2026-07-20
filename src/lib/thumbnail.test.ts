@@ -2,13 +2,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 import { findExteriorImageViaSearch, findMenuImageViaSearch } from "./thumbnail"
 
 const generateContentMock = vi.fn()
-const { searchRealImagesMock, searchGoogleImagesMock, fetchMock, fetchNaverPlacePhotosMock } =
-  vi.hoisted(() => ({
-    searchRealImagesMock: vi.fn(),
-    searchGoogleImagesMock: vi.fn(),
-    fetchMock: vi.fn(),
-    fetchNaverPlacePhotosMock: vi.fn(),
-  }))
+const {
+  searchRealImagesMock,
+  searchGoogleImagesMock,
+  fetchMock,
+  fetchNaverPlacePhotosMock,
+  fetchNaverPlaceAiCategoryPhotosMock,
+} = vi.hoisted(() => ({
+  searchRealImagesMock: vi.fn(),
+  searchGoogleImagesMock: vi.fn(),
+  fetchMock: vi.fn(),
+  fetchNaverPlacePhotosMock: vi.fn(),
+  fetchNaverPlaceAiCategoryPhotosMock: vi.fn(),
+}))
 
 vi.stubGlobal("fetch", fetchMock)
 
@@ -19,6 +25,7 @@ vi.mock("./imageSearch", () => ({
 
 vi.mock("./naverPlaceDetail", () => ({
   fetchNaverPlacePhotos: fetchNaverPlacePhotosMock,
+  fetchNaverPlaceAiCategoryPhotos: fetchNaverPlaceAiCategoryPhotosMock,
 }))
 
 vi.mock("@google/genai", () => ({
@@ -34,6 +41,7 @@ describe("thumbnail", () => {
     searchGoogleImagesMock.mockReset().mockResolvedValue([])
     fetchMock.mockReset()
     fetchNaverPlacePhotosMock.mockReset().mockResolvedValue([])
+    fetchNaverPlaceAiCategoryPhotosMock.mockReset().mockResolvedValue([])
   })
 
   function mockImageDownloadOk() {
@@ -94,7 +102,19 @@ describe("thumbnail", () => {
     expect(result).toBeNull()
   })
 
-  it("placeId가 있으면 상호명 텍스트 웹 검색 대신 그 place ID의 실제 등록 사진만 검증한다", async () => {
+  it("placeId가 있으면 네이버 AI 분류(외부) 사진을 최우선으로 반환한다(자체 비전 검증 없이)", async () => {
+    fetchNaverPlaceAiCategoryPhotosMock.mockResolvedValueOnce(["https://place.naver.com/ai-exterior.jpg"])
+
+    const result = await findExteriorImageViaSearch("test-key", "부평 이자카야 잇키", "12345")
+
+    expect(result).toBe("https://place.naver.com/ai-exterior.jpg")
+    expect(fetchNaverPlaceAiCategoryPhotosMock).toHaveBeenCalledWith("12345", "EXTERIOR", 4)
+    expect(fetchNaverPlacePhotosMock).not.toHaveBeenCalled()
+    expect(searchRealImagesMock).not.toHaveBeenCalled()
+    expect(searchGoogleImagesMock).not.toHaveBeenCalled()
+  })
+
+  it("AI 분류 사진이 없으면 place ID의 실제 등록 사진(top photo)을 비전으로 검증해 찾는다", async () => {
     fetchNaverPlacePhotosMock.mockResolvedValueOnce(["https://place.naver.com/real.jpg"])
     mockImageDownloadOk()
     generateContentMock.mockResolvedValueOnce({ text: "예" })
@@ -121,7 +141,21 @@ describe("thumbnail", () => {
   })
 
   describe("findMenuImageViaSearch", () => {
-    it("placeId가 있으면 그 place ID의 실제 등록 사진 중 메뉴판을 검증해 반환한다", async () => {
+    it("placeId가 있으면 네이버 AI 분류(메뉴판) 사진을 최우선으로 반환한다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: 상호명 텍스트 웹 검색 폴백이 이 가게와 무관한 다른 매장의
+      // 메뉴판 사진을 가져왔다. 네이버가 이 place 전용으로 이미 "메뉴판"으로 분류해둔
+      // 사진이 있으면 그걸 최우선으로 써야 무관한 사진이 섞이지 않는다.
+      fetchNaverPlaceAiCategoryPhotosMock.mockResolvedValueOnce(["https://place.naver.com/ai-menu.jpg"])
+
+      const result = await findMenuImageViaSearch("test-key", "부평 이자카야 잇키", "12345")
+
+      expect(result).toBe("https://place.naver.com/ai-menu.jpg")
+      expect(fetchNaverPlaceAiCategoryPhotosMock).toHaveBeenCalledWith("12345", "MENU", 4)
+      expect(fetchNaverPlacePhotosMock).not.toHaveBeenCalled()
+      expect(searchRealImagesMock).not.toHaveBeenCalled()
+    })
+
+    it("AI 분류 사진이 없으면 place ID의 실제 등록 사진 중 메뉴판을 검증해 반환한다", async () => {
       fetchNaverPlacePhotosMock.mockResolvedValueOnce(["https://place.naver.com/menu.jpg"])
       mockImageDownloadOk()
       generateContentMock.mockResolvedValueOnce({ text: "예" })

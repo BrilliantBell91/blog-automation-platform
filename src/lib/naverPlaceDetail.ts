@@ -266,6 +266,95 @@ export async function fetchNaverPlaceDetail(placeId: string): Promise<NaverPlace
   }
 }
 
+export type NaverPlaceAiPhotoCategory = "EXTERIOR" | "MENU"
+
+interface PhotoViewerImageRaw {
+  originalUrl?: string
+}
+
+interface PhotoViewerGraphQlResponse {
+  data?: { photoViewer?: { photos?: PhotoViewerImageRaw[] } }
+}
+
+const PHOTO_VIEWER_QUERY = `query getPhotoViewerItems($input: PhotoViewerInput) {
+  photoViewer(input: $input) {
+    photos {
+      originalUrl
+      relation
+      __typename
+    }
+    __typename
+  }
+}`
+
+/**
+ * 네이버 플레이스 "사진" 탭의 "AI View" 필터(외부/내부/메뉴판 등)가 이미 분류해둔 사진을
+ * 그대로 가져온다. 실제 브라우저 네트워크 요청을 캡처해 역추적한 결과, 이 GraphQL
+ * 엔드포인트(api.place.naver.com/graphql)는 로그인 쿠키나 캡차 토큰 없이도 응답한다는
+ * 것을 실측으로 확인했다(businessType 값도 검증하지 않아 아무 값이나 통과함).
+ *
+ * 이 사진들은 이 place가 실제로 리뷰/방문 후기에서 받은 사진 중 네이버 자체 AI가 이미
+ * "메뉴판"/"외부" 등으로 분류해둔 것이라(화면상 "AI로 선별된 메뉴판 사진입니다" 문구로
+ * 확인됨), 우리 쪽 비전 분류로 top photo를 하나씩 판별하는 것보다 훨씬 정확하고, 이 place
+ * 전용 사진이라 동명의 다른 가게 사진이 섞일 위험도 없다. 상호명 텍스트로 웹을 검색하는
+ * findMenuImageViaSearch의 웹 검색 폴백이 전혀 무관한 다른 가게의 메뉴판 사진을 가져온
+ * 사고가 실측으로 확인되어(예: tblg.k-img.com의 무관한 메뉴판), 이 카테고리 사진을
+ * 최우선 소스로 승격했다.
+ */
+export async function fetchNaverPlaceAiCategoryPhotos(
+  placeId: string,
+  category: NaverPlaceAiPhotoCategory,
+  count: number
+): Promise<string[]> {
+  if (count <= 0) return []
+  try {
+    const wtm = Buffer.from(
+      JSON.stringify({ arg: placeId, type: "restaurant", source: "place" })
+    ).toString("base64")
+
+    const res = await fetch("https://api.place.naver.com/graphql", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "User-Agent":
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+        referer: `https://m.place.naver.com/restaurant/${placeId}/photo`,
+        "x-wtm-graphql": wtm,
+      },
+      body: JSON.stringify([
+        {
+          operationName: "getPhotoViewerItems",
+          variables: {
+            input: {
+              businessId: placeId,
+              businessType: "restaurant",
+              cursors: [{ id: "aiView" }],
+              excludeAuthorIds: [],
+              excludeSection: [],
+              excludeClipIds: [],
+              dateRange: "",
+              filter: "AI View",
+              subFilter: category,
+            },
+          },
+          query: PHOTO_VIEWER_QUERY,
+        },
+      ]),
+    })
+    if (!res.ok) return []
+
+    const json = (await res.json()) as PhotoViewerGraphQlResponse[]
+    const photos = json[0]?.data?.photoViewer?.photos ?? []
+    return photos
+      .map((p) => p.originalUrl)
+      .filter((url): url is string => Boolean(url))
+      .slice(0, count)
+  } catch (error) {
+    console.warn("[naverPlaceDetail] AI 분류 사진 조회 실패", error)
+    return []
+  }
+}
+
 /**
  * place ID의 실제 사진(업체 등록 사진 + 방문자 인증 사진)을 가져온다. 첨부된 지도 URL이
  * 가리키는 바로 그 장소의 사진이라, 제목/태그로 검색하는 방식과 달리 완전히 다른 장소의
