@@ -34,16 +34,17 @@ function cleanTitleForSearch(title: string): string {
 
 // 외관/메뉴판 검색 공통 로직: placeId(사용자가 Notion 속성에 등록한 지도 URL에서 뽑은
 // 네이버 플레이스 ID)가 있으면 그 place ID로 실제 등록된 사진(업체가 직접 올린 사진
-// 우선, 그다음 방문자 사진)만 후보로 검증한다 — 지도 URL로 "이 가게가 맞다"는 게 이미
-// 검증돼 있으므로, 이름이 같은 다른 가게나 전혀 무관한 사진이 섞이지 않는다. placeId가
-// 없을 때만(지도 링크를 첨부하지 않은 글) 검색어 텍스트로 웹 전체를 검색하는 것으로
-// 폴백한다 — 이 경로는 동명의 다른 가게 사진이 섞일 위험이 있어 place ID 기준보다
-// 신뢰도가 낮다.
+// 우선, 그다음 방문자 사진)을 최우선으로 검증한다 — 지도 URL로 "이 가게가 맞다"는 게
+// 이미 검증돼 있으므로, 이름이 같은 다른 가게나 전혀 무관한 사진이 섞이지 않는다.
+// placeId가 없거나(지도 링크를 첨부하지 않은 글), fallbackToWebSearch가 true인데
+// place 등록 사진 중에 못 찾았으면 검색어 텍스트로 웹 전체를 검색하는 것으로 폴백한다
+// — 이 경로는 동명의 다른 가게 사진이 섞일 위험이 있어 place ID 기준보다 신뢰도가 낮다.
 async function findCategoryImage(
   apiKey: string,
   searchQuery: string,
   placeId: string | null | undefined,
-  classifyPrompt: string
+  classifyPrompt: string,
+  fallbackToWebSearch: boolean
 ): Promise<string | null> {
   if (!apiKey) return null
 
@@ -52,7 +53,7 @@ async function findCategoryImage(
     for (const candidate of verifiedPhotos) {
       if (await classifyPhoto(apiKey, candidate, classifyPrompt)) return candidate
     }
-    return null
+    if (!fallbackToWebSearch) return null
   }
 
   const candidates = [
@@ -69,6 +70,10 @@ async function findCategoryImage(
 
 /**
  * 가게 외관 사진을 찾아 검증까지 통과한 URL을 반환한다. 찾지 못하면 null.
+ *
+ * placeId가 있으면 등록 사진에서만 찾는다(웹 검색 폴백 없음) — 건물 외관은 다른 가게
+ * 사진이 섞이면 "이 가게가 이렇게 생겼다"는 구체적 사실이 통째로 틀려버리는 위험이 커서
+ * 보수적으로 접근한다.
  */
 export async function findExteriorImageViaSearch(
   apiKey: string,
@@ -76,11 +81,15 @@ export async function findExteriorImageViaSearch(
   placeId?: string | null
 ): Promise<string | null> {
   const query = `${cleanTitleForSearch(postTitle)} 외관`
-  return findCategoryImage(apiKey, query, placeId, EXTERIOR_CLASSIFY_PROMPT)
+  return findCategoryImage(apiKey, query, placeId, EXTERIOR_CLASSIFY_PROMPT, false)
 }
 
 /**
  * 가게 메뉴판 사진을 찾아 검증까지 통과한 URL을 반환한다. 찾지 못하면 null.
+ *
+ * placeId로 등록된 사진 중에 메뉴판이 없으면(실측 확인: 매장이 등록한 사진이 전부
+ * 음식/외관 사진이고 메뉴판 자체가 없는 경우가 흔함) 상호명 텍스트 웹 검색도 추가로
+ * 시도한다(사용자 요청 — 메뉴판은 반드시 포함되어야 함).
  */
 export async function findMenuImageViaSearch(
   apiKey: string,
@@ -88,5 +97,5 @@ export async function findMenuImageViaSearch(
   placeId?: string | null
 ): Promise<string | null> {
   const query = `${cleanTitleForSearch(postTitle)} 메뉴판`
-  return findCategoryImage(apiKey, query, placeId, MENU_CLASSIFY_PROMPT)
+  return findCategoryImage(apiKey, query, placeId, MENU_CLASSIFY_PROMPT, true)
 }

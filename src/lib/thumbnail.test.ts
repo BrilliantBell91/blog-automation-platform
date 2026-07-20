@@ -144,10 +144,29 @@ describe("thumbnail", () => {
       expect(searchRealImagesMock).toHaveBeenCalledWith("부평 이자카야 잇키 메뉴판", 5)
     })
 
-    it("메뉴판으로 판별된 후보가 없으면 null을 반환한다", async () => {
+    it("등록 사진 중에 메뉴판이 없으면(외관과 달리) 상호명 텍스트 웹 검색도 추가로 시도한다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: 매장이 등록한 사진에 메뉴판 자체가 없는 경우가 흔한데, 외관과
+      // 동일하게 place ID 등록 사진에서만 찾고 끝내버리면 메뉴판이 계속 누락됐다.
+      // 메뉴판은 반드시 포함돼야 한다는 요청에 따라, 등록 사진에서 못 찾으면 웹 검색도
+      // 추가로 시도해야 한다.
+      fetchNaverPlacePhotosMock.mockResolvedValueOnce(["https://place.naver.com/exterior.jpg"])
+      mockImageDownloadOk() // place 사진 검증용
+      generateContentMock.mockResolvedValueOnce({ text: "아니오" }) // place 사진은 메뉴판이 아님
+      searchRealImagesMock.mockResolvedValueOnce(["https://search.example.com/menu.jpg"])
+      mockImageDownloadOk() // 웹 검색 후보 검증용
+      generateContentMock.mockResolvedValueOnce({ text: "예" }) // 웹 검색 후보는 메뉴판임
+
+      const result = await findMenuImageViaSearch("test-key", "부평 이자카야 잇키", "12345")
+
+      expect(result).toBe("https://search.example.com/menu.jpg")
+      expect(searchRealImagesMock).toHaveBeenCalledWith("부평 이자카야 잇키 메뉴판", 5)
+    })
+
+    it("등록 사진과 웹 검색 모두에서 메뉴판으로 판별된 후보가 없으면 null을 반환한다", async () => {
       fetchNaverPlacePhotosMock.mockResolvedValueOnce(["https://place.naver.com/exterior.jpg"])
       mockImageDownloadOk()
       generateContentMock.mockResolvedValueOnce({ text: "아니오" })
+      searchRealImagesMock.mockResolvedValueOnce([])
 
       const result = await findMenuImageViaSearch("test-key", "부평 이자카야 잇키", "12345")
 

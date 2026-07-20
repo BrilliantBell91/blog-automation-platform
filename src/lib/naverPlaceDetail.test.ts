@@ -54,14 +54,49 @@ describe("fetchNaverPlaceDetail", () => {
     expect(result?.name).not.toBe("RELA")
   })
 
-  // 실측 확인된 사고: businessHours(WorkingHoursInfo)는 PlaceDetailBase 객체 밖(요일별
-  // 배열)에 있어 이 place 소유인지 특정할 수 없다. PlaceDetailBase가 스스로
-  // isBizHourMissing:true(정보 없음)라고 밝히는데도, 페이지 어딘가의 무관한 업체
-  // 영업시간을 그대로 가져다 붙이면 안 된다.
-  it("PlaceDetailBase가 isBizHourMissing:true면 다른 곳의 영업시간을 가져오지 않는다", async () => {
+  // 실측 확인: 요일별 영업시간(휴무일/브레이크타임 포함)은 newBusinessHours 캐시
+  // 필드에서 구조화된 배열로 내려온다. isBizHourMissing 플래그는 "요약 텍스트가
+  // 없다"는 뜻일 뿐(실측 확인된 실제 매장 사례: 요약은 비어 있어도 요일별 데이터는
+  // 정상 존재) 더 이상 추출을 막는 조건으로 쓰지 않는다.
+  it("newBusinessHours 필드에서 요일별 영업시간을 사람이 읽기 쉬운 문구로 합쳐 추출한다", async () => {
     const html = `<script>window.__APOLLO_STATE__ = {
-      "PlaceDetailBase:11574457":{"__typename":"PlaceDetailBase","id":"11574457","name":"에버랜드","roadAddress":"경기 용인시 처인구 포곡읍 에버랜드로 199","address":"경기 용인시 처인구 포곡읍 전대리 310","missingInfo":{"__typename":"MissingInfo","isBizHourMissing":true}},
-      "SomeOtherPlace:99999":{"businessHours":[{"__typename":"WorkingHoursInfo","day":"화","businessHours":{"__typename":"StartEndTime","start":"10:00","end":"22:00"}}]}
+      "PlaceDetailBase:1":{"__typename":"PlaceDetailBase","id":"1","name":"테스트식당","roadAddress":"서울 강남구 테스트로 1","address":"서울 강남구 테스트동 1"},
+      "newBusinessHours({\\"format\\":\\"restaurant\\"})":[{"__typename":"NewBusinessHour","name":"기본","businessHours":[
+        {"__typename":"WorkingHoursInfo","day":"월","businessHours":null,"breakHours":null,"description":"정기휴무 (매주 월요일)"},
+        {"__typename":"WorkingHoursInfo","day":"화","businessHours":{"__typename":"StartEndTime","start":"12:00","end":"22:15"},"breakHours":[{"__typename":"StartEndTime","start":"14:00","end":"17:30"}]},
+        {"__typename":"WorkingHoursInfo","day":"수","businessHours":{"__typename":"StartEndTime","start":"12:00","end":"22:15"},"breakHours":[{"__typename":"StartEndTime","start":"14:00","end":"17:30"}]},
+        {"__typename":"WorkingHoursInfo","day":"목","businessHours":{"__typename":"StartEndTime","start":"12:00","end":"22:15"},"breakHours":[{"__typename":"StartEndTime","start":"14:00","end":"17:30"}]},
+        {"__typename":"WorkingHoursInfo","day":"금","businessHours":{"__typename":"StartEndTime","start":"12:00","end":"22:15"},"breakHours":[{"__typename":"StartEndTime","start":"14:00","end":"17:30"}]},
+        {"__typename":"WorkingHoursInfo","day":"토","businessHours":{"__typename":"StartEndTime","start":"12:00","end":"22:15"},"breakHours":[{"__typename":"StartEndTime","start":"14:00","end":"17:30"}]},
+        {"__typename":"WorkingHoursInfo","day":"일","businessHours":{"__typename":"StartEndTime","start":"12:00","end":"22:15"},"breakHours":[{"__typename":"StartEndTime","start":"14:00","end":"17:30"}]}
+      ]}]
+    }</script>`
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => html }))
+
+    const result = await fetchNaverPlaceDetail("1")
+
+    expect(result?.businessHours).toBe(
+      "월 정기휴무 (매주 월요일) / 화~일 12:00-22:15 (브레이크타임 14:00-17:30)"
+    )
+  })
+
+  it("모든 요일이 같은 스케줄이면 하루 항목(day: '매일')으로도 정상 추출한다", async () => {
+    const html = `<script>window.__APOLLO_STATE__ = {
+      "PlaceDetailBase:1":{"__typename":"PlaceDetailBase","id":"1","name":"테스트카페","roadAddress":"서울 강남구 테스트로 1","address":"서울 강남구 테스트동 1"},
+      "newBusinessHours({\\"format\\":\\"restaurant\\"})":[{"__typename":"NewBusinessHour","name":"기본","businessHours":[
+        {"__typename":"WorkingHoursInfo","day":"매일","businessHours":{"__typename":"StartEndTime","start":"09:00","end":"21:00"},"breakHours":null}
+      ]}]
+    }</script>`
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => html }))
+
+    const result = await fetchNaverPlaceDetail("1")
+
+    expect(result?.businessHours).toBe("매일 09:00-21:00")
+  })
+
+  it("newBusinessHours 필드가 페이지에 없으면 영업시간을 undefined로 둔다", async () => {
+    const html = `<script>window.__APOLLO_STATE__ = {
+      "PlaceDetailBase:11574457":{"__typename":"PlaceDetailBase","id":"11574457","name":"에버랜드","roadAddress":"경기 용인시 처인구 포곡읍 에버랜드로 199","address":"경기 용인시 처인구 포곡읍 전대리 310"}
     }</script>`
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => html }))
 
@@ -70,16 +105,22 @@ describe("fetchNaverPlaceDetail", () => {
     expect(result?.businessHours).toBeUndefined()
   })
 
-  it("isBizHourMissing이 false면 영업시간을 추출한다", async () => {
+  // 실측 우려: 페이지에 "인근 추천 장소" 위젯이 있으면 이 필드가 다른 업체 것까지
+  // 두 번 이상 나올 수 있다. 어느 쪽이 이 place 소유인지 안전하게 특정할 수 없으므로
+  // 그런 경우엔 추출을 포기한다(에버랜드류 페이지에서 무관한 업체 데이터가 섞이던
+  // 과거 사고와 같은 종류의 위험을 새 추출 방식에서도 동일하게 방어).
+  it("newBusinessHours 필드가 페이지에 두 번 이상 나오면 어느 쪽인지 특정할 수 없어 추출을 포기한다", async () => {
+    const oneEntry = `[{"__typename":"NewBusinessHour","name":"기본","businessHours":[{"__typename":"WorkingHoursInfo","day":"화","businessHours":{"__typename":"StartEndTime","start":"10:00","end":"22:00"},"breakHours":null}]}]`
     const html = `<script>window.__APOLLO_STATE__ = {
-      "PlaceDetailBase:1":{"__typename":"PlaceDetailBase","id":"1","name":"테스트카페","roadAddress":"서울 강남구 테스트로 1","address":"서울 강남구 테스트동 1","missingInfo":{"__typename":"MissingInfo","isBizHourMissing":false}},
-      "hours":[{"__typename":"WorkingHoursInfo","day":"매일","businessHours":{"__typename":"StartEndTime","start":"09:00","end":"21:00"}}]
+      "PlaceDetailBase:11574457":{"__typename":"PlaceDetailBase","id":"11574457","name":"에버랜드","roadAddress":"경기 용인시 처인구 포곡읍 에버랜드로 199","address":"경기 용인시 처인구 포곡읍 전대리 310"},
+      "newBusinessHours({\\"format\\":\\"restaurant\\"})":${oneEntry},
+      "SomeOtherPlace:99999":{"newBusinessHours({\\"format\\":\\"restaurant\\"})":${oneEntry}}
     }</script>`
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => html }))
 
-    const result = await fetchNaverPlaceDetail("1")
+    const result = await fetchNaverPlaceDetail("11574457")
 
-    expect(result?.businessHours).toBe("매일 09:00 - 21:00")
+    expect(result?.businessHours).toBeUndefined()
   })
 
   it("PlaceDetailBase 객체 자체를 찾지 못하면 null을 반환한다(페이지 구조가 바뀐 경우 방어)", async () => {

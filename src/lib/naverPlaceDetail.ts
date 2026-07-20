@@ -97,22 +97,114 @@ function decodeJsonString(raw: string): string {
   }
 }
 
-// 영업시간은 "day"(예: "매일")와 시작/종료 시각, 라스트오더 시각이 별도 필드로 나뉘어
-// 있어 하나의 읽기 쉬운 문구로 합친다. WorkingHoursInfo는 PlaceDetailBase 객체 밖(요일별
-// 배열)에 있어 이 place 소유인지 정확히 특정할 수 없으므로, PlaceDetailBase 자체가
-// "영업시간 정보 없음"(isBizHourMissing)이라고 밝힌 경우엔 아예 추출을 시도하지 않는다
-// (실측 확인: 에버랜드는 isBizHourMissing:true인데도 페이지 어딘가의 무관한 업체
-// 영업시간이 "화 10:00-22:00"으로 잘못 붙는 사고가 있었음).
-function extractBusinessHours(html: string, scopedJson: string): string | undefined {
-  if (/"isBizHourMissing"\s*:\s*true/.test(scopedJson)) return undefined
+// extractBalancedJsonAt과 동일한 원리로 "["부터 대괄호 균형을 맞춰 JSON 배열 하나의
+// 범위를 잘라낸다.
+function extractBalancedArrayAt(html: string, startBracket: number): string | null {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = startBracket; i < html.length; i++) {
+    const ch = html[i]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (ch === "\\") {
+      escaped = true
+      continue
+    }
+    if (ch === '"') {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
+    if (ch === "[") depth++
+    else if (ch === "]") {
+      depth--
+      if (depth === 0) return html.slice(startBracket, i + 1)
+    }
+  }
+  return null
+}
 
-  const dayMatch = html.match(/"WorkingHoursInfo","day":"([^"]*)"/)
-  const timeMatch = html.match(/"StartEndTime","start":"([^"]*)","end":"([^"]*)"/)
-  if (!dayMatch?.[1] || !timeMatch) return undefined
+interface WorkingHoursInfoRaw {
+  day?: string
+  businessHours?: { start?: string; end?: string } | null
+  breakHours?: { start?: string; end?: string }[] | null
+  description?: string | null
+}
 
-  const base = `${dayMatch[1]} ${timeMatch[1]} - ${timeMatch[2]}`
-  const lastOrderMatch = html.match(/"LastOrderTimes"[^}]*"time":"([^"]*)"/)
-  return lastOrderMatch?.[1] ? `${base} (라스트오더 ${lastOrderMatch[1]})` : base
+interface NewBusinessHourRaw {
+  businessHours?: WorkingHoursInfoRaw[]
+}
+
+// 요일별 영업시간(휴무일/브레이크타임 포함)이 담긴 GraphQL 캐시 필드
+// newBusinessHours({"format":"restaurant"})에서 구조화된 배열을 그대로 파싱한다. 이
+// 함수가 호출되는 시점의 html은 이미 이 place ID 하나만을 위한 요청
+// (/place/{placeId}/home)의 응답이라, telephone을 페이지 전역에서 찾는 것과 같은
+// 근거로 다른 업체 데이터가 섞일 위험이 낮다. 예전에는 PlaceDetailBase의
+// isBizHourMissing 플래그가 true면 추출 자체를 포기했는데, 실측 확인 결과 이 플래그는
+// "요약 텍스트(openingHours)가 없다"는 뜻일 뿐 요일별 상세 데이터 존재 여부와는
+// 무관했다(요약은 비어 있어도 요일별 데이터는 정상 존재하는 매장이 실제로 있었음).
+function extractBusinessHours(html: string): string | undefined {
+  const anchor = '"newBusinessHours({\\"format\\":\\"restaurant\\"})":['
+  const start = html.indexOf(anchor)
+  if (start === -1) return undefined
+
+  // 이 필드가 페이지에 두 번 이상 나오면(예: 인근 추천 장소 위젯에 다른 업체의 같은
+  // 필드가 함께 실리는 경우) 어느 쪽이 이 place 소유인지 안전하게 특정할 수 없으므로
+  // 추출을 포기한다 — telephone을 "페이지 전역에서 유일하게 한 번만 나타난다"는 근거로
+  // 신뢰하는 것과 동일한 안전 기준이다.
+  if (html.indexOf(anchor, start + 1) !== -1) return undefined
+
+  const arrText = extractBalancedArrayAt(html, start + anchor.length - 1)
+  if (!arrText) return undefined
+
+  let parsed: NewBusinessHourRaw[]
+  try {
+    parsed = JSON.parse(arrText)
+  } catch {
+    return undefined
+  }
+
+  const days = parsed[0]?.businessHours
+  if (!days || days.length === 0) return undefined
+
+  return formatWeeklyHours(days)
+}
+
+// 연속된 요일이 같은 스케줄(또는 같은 휴무 사유)을 공유하면 "화~일 12:00-22:15" 처럼
+// 묶고, 그렇지 않은 요일은 콤마로 나열한다. 입력 배열은 이미 월~일 순서로 내려온다.
+function formatWeeklyHours(days: WorkingHoursInfoRaw[]): string | undefined {
+  const groups: { label: string; days: string[] }[] = []
+
+  for (const d of days) {
+    if (!d.day) continue
+
+    const label =
+      d.businessHours?.start && d.businessHours?.end
+        ? d.breakHours?.[0]?.start && d.breakHours[0]?.end
+          ? `${d.businessHours.start}-${d.businessHours.end} (브레이크타임 ${d.breakHours[0].start}-${d.breakHours[0].end})`
+          : `${d.businessHours.start}-${d.businessHours.end}`
+        : (d.description ?? "휴무")
+
+    const lastGroup = groups[groups.length - 1]
+    if (lastGroup && lastGroup.label === label) {
+      lastGroup.days.push(d.day)
+    } else {
+      groups.push({ label, days: [d.day] })
+    }
+  }
+
+  if (groups.length === 0) return undefined
+
+  return groups
+    .map(({ label, days: groupDays }) => {
+      const dayLabel =
+        groupDays.length >= 3 ? `${groupDays[0]}~${groupDays[groupDays.length - 1]}` : groupDays.join(",")
+      return `${dayLabel} ${label}`
+    })
+    .join(" / ")
 }
 
 // "예약", "배달", "포장", "무선 인터넷" 같은 편의 서비스 목록.
@@ -165,7 +257,7 @@ export async function fetchNaverPlaceDetail(placeId: string): Promise<NaverPlace
       // 실측으로 확인되어 전역 html에서 찾는다.
       telephone: extractField(html, "phone"),
       category: extractField(scoped, "category"),
-      businessHours: extractBusinessHours(html, scoped),
+      businessHours: extractBusinessHours(html),
       conveniences: conveniences.length > 0 ? conveniences : undefined,
     }
   } catch (error) {
