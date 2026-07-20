@@ -1221,25 +1221,27 @@ describe("llm", () => {
       expect(tiramisuMarkerIndex).toBeGreaterThan(dessertParagraphIndex)
     })
 
-    it("캡션 매칭이 전부 실패해도 사진들이 서로 다른 후보 문단에 고르게 분산되고 특정 문단에 몰리지 않는다 (회귀 테스트)", async () => {
+    it("캡션 매칭이 전부 실패해도(캡션끼리도 무관) 사진들이 서로 다른 후보 문단에 고르게 분산되고 특정 문단에 몰리지 않는다 (회귀 테스트)", async () => {
       // 실측 확인된 사고: "사진 개수만큼 문단을 나눠 쓰라"는 프롬프트 지시로 후보 문단이
       // 늘어난 상황에서, 매칭에 실패한 사진들의 폴백 위치가 고정된 균등 샘플링 배열을
       // 써서 일부 후보 문단은 사진을 아예 못 받고(여러 문단이 연달아 사진 없이 이어짐),
-      // 다른 문단엔 여러 장이 몰리는 문제가 있었다. 후보 문단 수(5)와 첨부 사진 수(5)가
-      // 정확히 같을 때, 매칭이 전부 실패해도(캡션이 문단과 무관) 다섯 사진이 다섯 후보
-      // 문단에 1:1로 정확히 퍼져야 한다.
+      // 다른 문단엔 여러 장이 몰리는 문제가 있었다. 캡션이 서로도 전혀 겹치지 않으면
+      // (아래 각 사진 캡션이 공유 단어 없이 완전히 다른 동물 이름) groupSimilarImages가
+      // 묶지 않으므로 다섯 사진이 다섯 개의 개별 그룹이 되고, 문단과도 무관해 매칭이
+      // 전부 실패해도 폴백 분산으로 서로 다른 후보 문단에 1:1로 퍼져야 한다.
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock.mockResolvedValueOnce([]) // 리드 사진 검색도 실패시켜 순수 분산 로직만 검증
       generateContentMock.mockResolvedValueOnce({
         text: "안녕하세요.\n\n첫 번째 문단 내용입니다 여기에는 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n두 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n세 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n네 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n다섯 번째 문단 내용입니다 여기에도 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.\n\n마무리 인사.",
       })
 
+      const unrelatedLabels = ["고양이", "강아지", "앵무새", "금붕어", "토끼"]
       const { content: result } = await generateNaverDraft({
         ...mockPost,
         contentAttachments: [1, 2, 3, 4, 5].map((n) => ({
           kind: "image" as const,
           url: `https://s3.example.com/${n}.jpg`,
-          label: `전혀 상관없는 잡담 ${n}`,
+          label: unrelatedLabels[n - 1],
         })),
       })
 
@@ -1262,6 +1264,108 @@ describe("llm", () => {
 
       expect(sections.every((s) => s >= 0)).toBe(true)
       expect(new Set(sections).size).toBe(5) // 다섯 마커가 다섯 개의 서로 다른 구간에 위치
+    })
+
+    it("캡션 키워드가 겹치는 사진끼리는(전체요리/초밥/디저트처럼) 같은 문단에 묶여서 배치된다 (회귀 테스트)", async () => {
+      // 사용자 요청: "모든 문단마다 억지로 사진을 끼워넣지 말고, 전체요리/메인요리(초밥)/
+      // 디저트처럼 비슷한 사진은 묶어서 올려달라." 초밥 클로즈업 두 장은 캡션에 공통
+      // 키워드("초밥")가 있으므로 하나의 문단에 함께 배치되고, 무관한 디저트 사진은
+      // 다른 문단에 홀로 배치돼야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n오늘은 초밥을 먹었는데 정말 신선하고 맛있었습니다.\n\n디저트도 나왔는데 부드럽고 좋았습니다.\n\n마무리 인사.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/sushi-a.jpg", label: "초밥 클로즈업" },
+          { kind: "image", url: "https://s3.example.com/sushi-b.jpg", label: "초밥 접시 전체" },
+          { kind: "image", url: "https://s3.example.com/dessert.jpg", label: "아이스크림 디저트" },
+        ],
+      })
+
+      const sushiParagraphIndex = result.indexOf("오늘은 초밥을 먹었는데")
+      const dessertParagraphIndex = result.indexOf("디저트도 나왔는데")
+      const sushiAIndex = result.indexOf("https://s3.example.com/sushi-a.jpg")
+      const sushiBIndex = result.indexOf("https://s3.example.com/sushi-b.jpg")
+      const dessertMarkerIndex = result.indexOf("https://s3.example.com/dessert.jpg")
+
+      // 초밥 두 장은 같은(초밥) 문단 안에, 디저트 문단이 시작되기 전에 함께 위치한다
+      expect(sushiAIndex).toBeGreaterThan(sushiParagraphIndex)
+      expect(sushiBIndex).toBeGreaterThan(sushiParagraphIndex)
+      expect(sushiAIndex).toBeLessThan(dessertParagraphIndex)
+      expect(sushiBIndex).toBeLessThan(dessertParagraphIndex)
+      // 디저트 사진은 초밥 사진들과 묶이지 않고 디저트 문단 뒤에 별도로 위치한다
+      expect(dessertMarkerIndex).toBeGreaterThan(dessertParagraphIndex)
+    })
+
+    it("첨부 사진이 많아도 도입부(첫 문단)와 마무리(끝 문단)에는 억지로 사진을 채우지 않는다 (회귀 테스트)", async () => {
+      // 사용자 요청: "초반과 후반은 사진 밀도 규칙을 따를 필요 없다." getVisualParagraphCandidates가
+      // 이미 문서의 맨 첫/맨 끝 문단은 후보에서 제외하므로, 그 두 문단에는 어떤 경로로도
+      // 사진 마커가 붙지 않아야 한다(대표/메뉴판 사진도 첫 문단이 아니라 별도 삽입 문단에
+      // 붙는다).
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요, 오늘 후기를 시작합니다.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n세 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n네 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n오늘 방문은 여기까지이고 다음에 또 오겠습니다.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [1, 2, 3, 4].map((n) => ({
+          kind: "image" as const,
+          url: `https://s3.example.com/${n}.jpg`,
+          label: `잡담사진${n}`,
+        })),
+      })
+
+      const firstParagraphEnd = result.indexOf("첫 번째 이야기입니다")
+      const lastParagraphStart = result.indexOf("오늘 방문은 여기까지이고")
+
+      const openingText = result.slice(0, firstParagraphEnd)
+      const closingText = result.slice(lastParagraphStart)
+
+      expect(openingText).not.toContain("[사진 원본")
+      expect(closingText).not.toContain("[사진 원본")
+    })
+
+    it("후보 문단이 충분히 많으면 도입부/마무리 쪽 후보 문단 한두 개는 건너뛰고 중반부에만 배치한다 (회귀 테스트)", async () => {
+      // trimHeadAndTail: 후보가 10개면 앞/뒤 각 1개(floor(10*0.15))씩 제외한 중반부만 쓴다.
+      // 첫 문단(P1)과 마지막 문단(P10)은 이미 candidates에는 들어있지만(순수 첫/끝
+      // 문단이 아니므로), 밀도 규칙 완화 대상인 "도입부/마무리 쪽"이라 사진이 붙지
+      // 않아야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      const bodyParagraphs = Array.from(
+        { length: 10 },
+        (_, i) => `P${i + 1} 문단 내용입니다 여기에는 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.`
+      ).join("\n\n")
+      generateContentMock.mockResolvedValueOnce({
+        text: `안녕하세요.\n\n${bodyParagraphs}\n\n마무리 인사.`,
+      })
+
+      const unrelatedLabels = ["고양이", "강아지", "앵무새", "금붕어", "토끼", "다람쥐", "거북이", "햄스터"]
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: unrelatedLabels.map((label, i) => ({
+          kind: "image" as const,
+          url: `https://s3.example.com/${i + 1}.jpg`,
+          label,
+        })),
+      })
+
+      const p1End = result.indexOf("P2 문단")
+      const p10Start = result.indexOf("P10 문단")
+      const closingStart = result.indexOf("마무리 인사")
+
+      const p1Section = result.slice(0, p1End) // 인사말 + P1
+      const p10Section = result.slice(p10Start, closingStart) // P10만
+
+      expect(p1Section).not.toContain("[사진 원본")
+      expect(p10Section).not.toContain("[사진 원본")
+      // 전부 포함 불변식: 중반부(P2~P9)에는 여덟 장이 모두 빠짐없이 포함된다
+      unrelatedLabels.forEach((_, i) => {
+        expect(result).toContain(`https://s3.example.com/${i + 1}.jpg`)
+      })
     })
   })
 })

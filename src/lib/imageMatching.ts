@@ -163,3 +163,42 @@ export function matchImagesToParagraphs(
     return best.index
   })
 }
+
+// 한 그룹에 사진이 무한정 쌓이는 것을 막는 상한. 사용자가 예시로 든 "전체요리/메인요리
+// (초밥)/디저트" 그룹 규모를 참고해, 자연스럽게 묶이되 한 문단이 사진으로 도배되지
+// 않는 선(최대 3장)으로 잡았다.
+const MAX_SIMILAR_GROUP_SIZE = 3
+
+// 캡션 키워드가 겹치는 사진끼리(예: "초밥"이 포함된 여러 장) 묶어서, 같은 문단에 함께
+// 배치할 수 있게 사진 인덱스 그룹 목록을 반환한다(입력 순서 기준, 각 사진은 정확히
+// 한 그룹에만 속함 — 매칭 안 되는 사진은 원소 1개짜리 그룹이 된다). "짧은 문단 하나에
+// 사진 하나씩 억지로 끼워넣지 말고, 전체요리/메인요리/디저트처럼 유사한 사진은 묶어
+// 달라"는 요청에 따라 도입했다. 예전에 "소프트 페널티로 인한 무한정 크라우딩" 사고가
+// 있었으므로(그래서 한때 완전히 1문단=1사진으로 하드 제한했었다), 이번엔 명시적으로
+// 캡션이 실제로 겹치는 경우로만 그룹을 만들고 크기도 상한을 둬 재발을 막는다.
+export function groupSimilarImages(captions: string[]): number[][] {
+  const tokenSets = captions.map((caption) => new Set(tokenize(caption)))
+  const assigned = new Array(captions.length).fill(false)
+  const groups: number[][] = []
+
+  for (let i = 0; i < captions.length; i++) {
+    if (assigned[i]) continue
+    assigned[i] = true
+    const group = [i]
+
+    if (tokenSets[i].size > 0) {
+      for (let j = i + 1; j < captions.length && group.length < MAX_SIMILAR_GROUP_SIZE; j++) {
+        if (assigned[j]) continue
+        const overlaps = [...tokenSets[j]].some((token) => tokenSets[i].has(token))
+        if (overlaps) {
+          assigned[j] = true
+          group.push(j)
+        }
+      }
+    }
+
+    groups.push(group)
+  }
+
+  return groups
+}

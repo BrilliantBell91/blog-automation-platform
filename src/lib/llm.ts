@@ -6,7 +6,7 @@ import {
   type IllustrativeImageStyle,
 } from "./imageGen"
 import { searchRealImages, searchGoogleImages } from "./imageSearch"
-import { analyzeImagesBatch, matchImagesToParagraphs } from "./imageMatching"
+import { analyzeImagesBatch, matchImagesToParagraphs, groupSimilarImages } from "./imageMatching"
 import { searchNaverPlace } from "./naverLocalSearch"
 import { extractNaverPlaceId, fetchNaverPlaceDetail, fetchNaverPlacePhotos } from "./naverPlaceDetail"
 import { inferFacilityFromReviews } from "./naverReviewSearch"
@@ -384,6 +384,21 @@ function findLeadInsertionIndex(paragraphs: string[]): number {
   let idx = 1
   while (idx < paragraphs.length && paragraphs[idx].trim().startsWith(">")) idx++
   return idx
+}
+
+// 사진 밀도 규칙("본문 중간부터 1~3줄 간격")은 도입부/마무리 잡담까지 억지로 적용할
+// 필요가 없다는 요청에 따라, 후보 문단 목록의 앞/뒤 일부를 잘라 "중반부"만 남긴다.
+// 글이 짧아 중반부가 지나치게 작아지면(예: 후보 4개 이하) 잘라내지 않고 전체를 그대로
+// 쓴다 — 사진을 아예 못 넣게 되는 것을 막기 위함이다.
+const HEAD_TAIL_TRIM_RATIO = 0.15
+const MIN_MIDDLE_CANDIDATES = 4
+
+function trimHeadAndTail(candidates: number[]): number[] {
+  if (candidates.length <= MIN_MIDDLE_CANDIDATES) return candidates
+  const trim = Math.floor(candidates.length * HEAD_TAIL_TRIM_RATIO)
+  if (trim === 0) return candidates
+  const trimmed = candidates.slice(trim, candidates.length - trim)
+  return trimmed.length >= MIN_MIDDLE_CANDIDATES ? trimmed : candidates
 }
 
 // 문단별 사진 배치 개수를 추적해, 아직 사진이 없는 후보 문단을 우선 고르는 헬퍼를 만든다.
@@ -775,12 +790,17 @@ async function insertImages(
 
   // 나머지 첨부 사진(리드/메뉴판으로 뽑히지 않은 것)은 위치 순서가 아니라 캡션 키워드
   // 겹침으로 배치한다 — 균등 간격 배치는 "우니초밥을 얘기하는 문단에 엉뚱한 사진이
-  // 붙는" 사고의 원인이었다. 매칭이 실패해도(캡션 없음, 겹치는 키워드 없음 등) 첨부
-  // 사진은 반드시 결과에 포함해야 하므로(전부 포함 불변식), 아직 사진이 없는 후보
-  // 문단을 우선 고르는 picker를 폴백으로 쓴다. 메뉴판 사진이 이미 문단을 썼으므로,
-  // 매칭 후보 목록에서도 그 문단을 미리 제외해 매칭 단계가 그 자리를 다시 차지하지
-  // 않게 한다(리드 사진은 이제 별도 문단으로 삽입되어 애초에 candidates에 없으므로
-  // 별도 제외가 필요 없다).
+  // 붙는" 사고의 원인이었다. 메뉴판 사진이 이미 문단을 썼으므로, 후보 목록에서도 그
+  // 문단을 미리 제외한다(리드 사진은 별도 문단으로 삽입되어 애초에 candidates에 없다).
+  //
+  // "모든 문단마다 억지로 사진을 끼워넣지 말고, 도입부/마무리는 건너뛰고 중반부에
+  // 1~3줄 간격으로, 전체요리/메인요리/디저트처럼 비슷한 사진은 묶어서 배치해달라"는
+  // 요청에 따라 두 가지를 적용한다: (1) 후보를 도입부/마무리를 잘라낸 중반부로 좁히고
+  // (trimHeadAndTail), (2) 캡션 키워드가 겹치는 사진끼리 그룹으로 묶어(groupSimilarImages)
+  // 그룹 단위로 문단에 배치한다 — 그룹 수가 원래 사진 수보다 적어지므로 문단 사이에
+  // 자연스럽게 사진 없는 여백이 생긴다. 매칭이 실패해도(캡션 없음, 겹치는 키워드 없음
+  // 등) 첨부 사진은 반드시 결과에 포함해야 하므로(전부 포함 불변식), 아직 사진이 없는
+  // 후보 문단을 우선 고르는 picker를 폴백으로 쓴다.
   const matchableEntries = attachments
     .map((attachment, i) => ({ attachment, analysis: analyses[i] }))
     .filter(
@@ -792,17 +812,28 @@ async function insertImages(
     const reservedParagraphs = new Set(
       [menuParagraphIndex].filter((v): v is number => v !== undefined)
     )
-    const candidateParagraphs = candidates
-      .filter((index) => !reservedParagraphs.has(index))
-      .map((index) => ({ index, text: paragraphs[index] }))
-    const matchedIndexes = matchImagesToParagraphs(
-      matchableEntries.map(({ analysis }) => ({ caption: analysis.caption })),
+    const basePool = candidates.filter((index) => !reservedParagraphs.has(index))
+    const middleCandidates = trimHeadAndTail(basePool)
+    const candidateParagraphs = middleCandidates.map((index) => ({ index, text: paragraphs[index] }))
+
+    const groups = groupSimilarImages(matchableEntries.map(({ analysis }) => analysis.caption))
+    const groupMatchedIndexes = matchImagesToParagraphs(
+      groups.map((group) => ({
+        caption: group.map((memberIndex) => matchableEntries[memberIndex].analysis.caption).join(", "),
+      })),
       candidateParagraphs
     )
-    matchableEntries.forEach(({ attachment }, i) => {
-      const paragraphIndex = matchedIndexes[i] ?? picker.pick()
-      appendImageMarker(paragraphIndex, attachment.url)
+
+    const middlePicker = createLeastUsedPicker(
+      middleCandidates.length > 0 ? middleCandidates : candidates
+    )
+    groups.forEach((group, g) => {
+      const paragraphIndex = groupMatchedIndexes[g] ?? middlePicker.pick()
+      middlePicker.markUsed(paragraphIndex)
       picker.markUsed(paragraphIndex)
+      group.forEach((memberIndex) => {
+        appendImageMarker(paragraphIndex, matchableEntries[memberIndex].attachment.url)
+      })
     })
   }
 
