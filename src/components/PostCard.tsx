@@ -24,11 +24,14 @@ export function PostCard({ post }: PostCardProps) {
           // 초안(검색 결과/Pollinations 등)에서 가져온 썸네일은 도메인이 제각각이라
           // next/image remotePatterns로 전부 허용할 수 없어 일반 img로 렌더링한다
           // (NaverDraftView와 동일한 이유). object-cover로 카드 비율에 맞게 채운다.
+          // 네이버 플레이스 사진(blogfiles.pstatic.net 등)은 Referer가 다른 도메인이면
+          // 403으로 차단하는 핫링크 방지가 걸려있어(실측 확인) no-referrer로 우회한다.
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={post.imageUrl}
             alt={post.title}
             className="h-full w-full object-cover transition-transform group-hover:scale-105"
+            referrerPolicy="no-referrer"
           />
         ) : post.imageUrl ? (
           <OptimizedImage

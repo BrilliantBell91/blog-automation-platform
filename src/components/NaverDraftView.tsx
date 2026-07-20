@@ -25,10 +25,14 @@ function renderBlock(block: NaverDraftBlock, index: number) {
       return (
         <figure key={index} className="my-4">
           {/* 첨부 이미지 도메인이 다양한 S3 리전이라 next/image remotePatterns 관리 부담을 피하기 위해 일반 img 사용 */}
+          {/* 네이버 플레이스에서 가져온 사진(blogfiles.pstatic.net 등)은 Referer가 다른
+              도메인이면 403으로 차단하는 핫링크 방지가 걸려있다(실측 확인). 브라우저가
+              Referer를 아예 보내지 않으면 정상 로드되므로 no-referrer로 우회한다. */}
           <img
             src={block.url}
             alt={block.caption || "첨부 사진"}
             className="w-full rounded-lg object-cover"
+            referrerPolicy="no-referrer"
           />
           {block.caption && (
             <figcaption className="mt-1 text-center text-sm text-muted-foreground">

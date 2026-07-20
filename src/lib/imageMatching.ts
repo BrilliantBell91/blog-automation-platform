@@ -15,6 +15,7 @@ import { runVisionPromptBatch } from "./imageGen"
 export interface ImageAnalysis {
   caption: string
   isExterior: boolean
+  isMenu: boolean
 }
 
 // Notion 첨부 사진의 label은 대개 원본 파일명("20180206_195520.jpg", "KakaoTalk_
@@ -29,21 +30,23 @@ export interface ImageAnalysis {
 // 않으므로 기존 동작(사람이 입력한 캡션은 그대로 재사용)은 그대로 유지된다.
 const MEANINGLESS_LABEL_PATTERN = /^[a-z0-9_\-\s.]+\.(jpe?g|png|heic|webp|gif)$/i
 
-// 라벨 텍스트만으로 외관 사진 여부를 저비용으로 추정한다(비전 호출 없음).
+// 라벨 텍스트만으로 외관/메뉴판 사진 여부를 저비용으로 추정한다(비전 호출 없음).
 const EXTERIOR_LABEL_HINT = /외관|간판|입구|정면|건물/
+const MENU_LABEL_HINT = /메뉴판|메뉴 사진|가격표|메뉴 리스트/
 
 const BATCH_SIZE = 5
 
 const BATCH_ANALYSIS_PROMPT = `아래 사진들을 순서대로 분석해서, 각 사진마다 한 줄씩 다음 형식으로만 답하세요:
-N) 키워드1, 키워드2 | 예 또는 아니오
+N) 키워드1, 키워드2 | 예 또는 아니오 | 예 또는 아니오
 
 - 키워드: 그 사진의 핵심 피사체를 2~4개의 짧은 한국어 단어로 쉼표 구분해서 나열 (예: "우니, 초밥, 클로즈업")
-- 마지막 예/아니오: 그 사진이 가게/매장/장소의 외관(건물 정면, 간판이 보이는 입구, 외부 전경)이면 "예", 아니면 "아니오"
+- 첫 번째 예/아니오: 그 사진이 가게/매장/장소의 외관(건물 정면, 간판이 보이는 입구, 외부 전경)이면 "예", 아니면 "아니오"
+- 두 번째 예/아니오: 그 사진이 메뉴판(가격이 적힌 메뉴 목록/메뉴판 사진)이면 "예", 아니면 "아니오"
 - 사진 번호(N)는 반드시 실제 순서와 일치시키고, 다른 설명 없이 위 형식의 줄만 그대로 출력하세요.`
 
 function parseBatchAnalysis(text: string, count: number): (ImageAnalysis | null)[] {
   const results: (ImageAnalysis | null)[] = Array.from({ length: count }, () => null)
-  const lineRegex = /^(\d+)\)\s*(.+?)\s*\|\s*(예|아니오)\s*$/gm
+  const lineRegex = /^(\d+)\)\s*(.+?)\s*\|\s*(예|아니오)\s*\|\s*(예|아니오)\s*$/gm
   let match: RegExpExecArray | null
   while ((match = lineRegex.exec(text)) !== null) {
     const index = Number(match[1]) - 1
@@ -51,6 +54,7 @@ function parseBatchAnalysis(text: string, count: number): (ImageAnalysis | null)
     results[index] = {
       caption: match[2].trim().slice(0, 60),
       isExterior: match[3] === "예",
+      isMenu: match[4] === "예",
     }
   }
   return results
@@ -68,13 +72,17 @@ export async function analyzeImagesBatch(
   apiKey: string,
   images: { url: string; existingLabel?: string }[]
 ): Promise<ImageAnalysis[]> {
-  const results: ImageAnalysis[] = images.map(() => ({ caption: "", isExterior: false }))
+  const results: ImageAnalysis[] = images.map(() => ({ caption: "", isExterior: false, isMenu: false }))
   const needsVision: { originalIndex: number; url: string }[] = []
 
   images.forEach((image, i) => {
     const label = image.existingLabel?.trim()
     if (label && !MEANINGLESS_LABEL_PATTERN.test(label)) {
-      results[i] = { caption: label, isExterior: EXTERIOR_LABEL_HINT.test(label) }
+      results[i] = {
+        caption: label,
+        isExterior: EXTERIOR_LABEL_HINT.test(label),
+        isMenu: MENU_LABEL_HINT.test(label),
+      }
     } else {
       needsVision.push({ originalIndex: i, url: image.url })
     }

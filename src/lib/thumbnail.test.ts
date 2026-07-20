@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { findExteriorImageViaSearch } from "./thumbnail"
+import { findExteriorImageViaSearch, findMenuImageViaSearch } from "./thumbnail"
 
 const generateContentMock = vi.fn()
 const { searchRealImagesMock, searchGoogleImagesMock, fetchMock, fetchNaverPlacePhotosMock } =
@@ -118,5 +118,40 @@ describe("thumbnail", () => {
 
     expect(result).toBeNull()
     expect(searchRealImagesMock).not.toHaveBeenCalled()
+  })
+
+  describe("findMenuImageViaSearch", () => {
+    it("placeId가 있으면 그 place ID의 실제 등록 사진 중 메뉴판을 검증해 반환한다", async () => {
+      fetchNaverPlacePhotosMock.mockResolvedValueOnce(["https://place.naver.com/menu.jpg"])
+      mockImageDownloadOk()
+      generateContentMock.mockResolvedValueOnce({ text: "예" })
+
+      const result = await findMenuImageViaSearch("test-key", "부평 이자카야 잇키", "12345")
+
+      expect(result).toBe("https://place.naver.com/menu.jpg")
+      expect(fetchNaverPlacePhotosMock).toHaveBeenCalledWith("12345", 4)
+      expect(searchRealImagesMock).not.toHaveBeenCalled()
+    })
+
+    it("placeId가 없으면 '메뉴판' 검색어로 웹 검색을 시도한다", async () => {
+      searchRealImagesMock.mockResolvedValueOnce(["https://search.example.com/menu.jpg"])
+      mockImageDownloadOk()
+      generateContentMock.mockResolvedValueOnce({ text: "예" })
+
+      const result = await findMenuImageViaSearch("test-key", "부평 이자카야 잇키")
+
+      expect(result).toBe("https://search.example.com/menu.jpg")
+      expect(searchRealImagesMock).toHaveBeenCalledWith("부평 이자카야 잇키 메뉴판", 5)
+    })
+
+    it("메뉴판으로 판별된 후보가 없으면 null을 반환한다", async () => {
+      fetchNaverPlacePhotosMock.mockResolvedValueOnce(["https://place.naver.com/exterior.jpg"])
+      mockImageDownloadOk()
+      generateContentMock.mockResolvedValueOnce({ text: "아니오" })
+
+      const result = await findMenuImageViaSearch("test-key", "부평 이자카야 잇키", "12345")
+
+      expect(result).toBeNull()
+    })
   })
 })

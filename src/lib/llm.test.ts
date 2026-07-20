@@ -10,6 +10,7 @@ const {
   searchNaverPlaceMock,
   fetchNaverPlaceDetailMock,
   fetchNaverPlacePhotosMock,
+  inferFacilityFromReviewsMock,
   fetchMock,
   generateGroqTextMock,
   generateGroqVisionTextMock,
@@ -20,6 +21,7 @@ const {
   searchNaverPlaceMock: vi.fn().mockResolvedValue(null),
   fetchNaverPlaceDetailMock: vi.fn().mockResolvedValue(null),
   fetchNaverPlacePhotosMock: vi.fn().mockResolvedValue([]),
+  inferFacilityFromReviewsMock: vi.fn().mockResolvedValue(null),
   // verifyImageRelevanceMock이 실제 구현을 대체하므로 원래는 fetch가 호출될 일이 없지만,
   // 혹시 놓친 경로가 실제 네트워크를 타지 않도록 안전망으로 항상 실패시켜둔다.
   fetchMock: vi.fn().mockResolvedValue({ ok: false }),
@@ -42,6 +44,10 @@ vi.mock("./imageSearch", () => ({
 
 vi.mock("./naverLocalSearch", () => ({
   searchNaverPlace: searchNaverPlaceMock,
+}))
+
+vi.mock("./naverReviewSearch", () => ({
+  inferFacilityFromReviews: inferFacilityFromReviewsMock,
 }))
 
 vi.mock("./groqClient", () => ({
@@ -128,6 +134,7 @@ describe("llm", () => {
     searchNaverPlaceMock.mockReset().mockResolvedValue(null)
     fetchNaverPlaceDetailMock.mockReset().mockResolvedValue(null)
     fetchNaverPlacePhotosMock.mockReset().mockResolvedValue([])
+    inferFacilityFromReviewsMock.mockReset().mockResolvedValue(null)
     fetchMock.mockReset().mockResolvedValue({ ok: false })
     generateGroqTextMock.mockReset().mockResolvedValue(null)
     generateGroqVisionTextMock.mockReset().mockResolvedValue(null)
@@ -246,6 +253,63 @@ describe("llm", () => {
       expect(callArgs.contents).toContain("확인된 매장 정보")
       expect(callArgs.contents).toContain("인천 부평구 마장로 397 1층")
       expect(callArgs.contents).toContain("0507-1490-0634")
+    })
+
+    it("네이버 플레이스에 영업시간 정보가 있으면 그대로 확인된 매장 정보에 반영한다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      fetchNaverPlaceDetailMock.mockResolvedValueOnce({
+        name: "잇키",
+        roadAddress: "인천 부평구 마장로 397 1층",
+        businessHours: "매일 11:00 - 22:00",
+      })
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "link", url: "https://map.naver.com/p/search/잇키/place/1370160067" },
+        ],
+      })
+
+      const callArgs = generateContentMock.mock.calls[0][0]
+      expect(callArgs.contents).toContain("영업시간: 매일 11:00 - 22:00")
+      expect(inferFacilityFromReviewsMock).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        "영업시간"
+      )
+    })
+
+    it("영업시간은 매장 주요 정보에 반드시 포함돼야 하므로, 공식 데이터에 없으면 블로그 리뷰로 보완한다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: 네이버 플레이스 페이지 구조상 isBizHourMissing이 true로
+      // 표시되는 매장이 적지 않은데(실제로는 요일별 영업시간 데이터가 존재해도), 기존
+      // 코드는 이 경우 영업시간을 아예 생략했다. 화장실 정보와 동일한 방식(리뷰 검색
+      // 보완)으로 영업시간도 반드시 채워야 한다는 요청.
+      process.env.LLM_API_KEY = "test-key"
+      fetchNaverPlaceDetailMock.mockResolvedValueOnce({
+        name: "잇키",
+        roadAddress: "인천 부평구 마장로 397 1층",
+        // businessHours 없음(공식 데이터 누락 상황 재현)
+      })
+      inferFacilityFromReviewsMock.mockImplementation(async (_apiKey, _placeName, facility) =>
+        facility === "영업시간" ? "매일 11:00-21:00" : null
+      )
+      generateContentMock.mockResolvedValueOnce({ text: "생성된 초안 내용" })
+
+      await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "link", url: "https://map.naver.com/p/search/잇키/place/1370160067" },
+        ],
+      })
+
+      expect(inferFacilityFromReviewsMock).toHaveBeenCalledWith(
+        expect.anything(),
+        "잇키",
+        "영업시간"
+      )
+      const callArgs = generateContentMock.mock.calls[0][0]
+      expect(callArgs.contents).toContain("영업시간(리뷰 기준, 참고용): 매일 11:00-21:00")
     })
 
     it("지도 링크가 있으면(place ID 확인됨) 대표 사진은 상호명 텍스트 웹 검색이 아니라 place ID로 등록된 실제 매장 사진만 시도한다 (회귀 테스트)", async () => {
@@ -946,6 +1010,59 @@ describe("llm", () => {
       expect(leadImageUrl).toBe("https://s3.example.com/exterior.jpg")
       expect(markerIndex).toBeGreaterThan(-1)
       expect(markerIndex).toBeLessThan(secondParagraphIndex) // 첫 번째 후보 문단(=두 번째 문단) 뒤에 붙음
+    })
+
+    it("첨부 사진 중 메뉴판으로 판별된 사진은 '메뉴 ▼' 소제목 바로 다음 문단에 강제 배치된다 (회귀 테스트)", async () => {
+      // 사용자 요청: 외관 사진뿐 아니라 메뉴판 사진도 반드시 포함시켜야 한다. 첨부에
+      // 메뉴판 사진이 있으면 그걸 쓰고, 소제목("메뉴 ▼") 바로 다음 문단에 배치해야
+      // 소제목과 사진이 자연스럽게 이어진다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n메뉴 ▼\n\n오늘의 메뉴를 소개합니다 다양한 요리가 준비되어 있어요.\n\n마무리 인사.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/menu.jpg", label: "메뉴판 사진" },
+        ],
+      })
+
+      const menuHeadingIndex = result.indexOf("메뉴 ▼")
+      const menuBodyIndex = result.indexOf("오늘의 메뉴를 소개합니다")
+      const menuMarkerIndex = result.indexOf("https://s3.example.com/menu.jpg")
+
+      expect(menuMarkerIndex).toBeGreaterThan(menuHeadingIndex)
+      expect(menuMarkerIndex).toBeGreaterThan(menuBodyIndex) // 소제목 다음 첫 후보 문단(본문) 뒤에 위치
+    })
+
+    it("첨부 사진 중 메뉴판이 없으면 findMenuImageViaSearch로 찾아 삽입한다 (회귀 테스트)", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      searchRealImagesMock.mockImplementation(async (query: string) =>
+        query.includes("메뉴판") ? ["https://search.example.com/menu.jpg"] : []
+      )
+      fetchMock.mockResolvedValue({
+        ok: true,
+        headers: { get: () => "image/jpeg" },
+        arrayBuffer: async () => new ArrayBuffer(4),
+      })
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+      })
+      // 메뉴판 검색 후보 검증 비전 호출: "예"
+      generateContentMock.mockResolvedValue({ text: "예" })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/food.jpg", label: "음식 사진" },
+        ],
+      })
+
+      expect(searchRealImagesMock).toHaveBeenCalledWith("테스트 포스트 메뉴판", 5)
+      expect(result).toContain(
+        "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/menu.jpg]"
+      )
     })
 
     it("대표 사진 검색 시 지도 링크의 place ID로 확인된 실제 매장 사진을 상호명 텍스트 웹 검색보다 우선한다 (회귀 테스트)", async () => {

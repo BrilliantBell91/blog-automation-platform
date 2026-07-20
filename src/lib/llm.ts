@@ -10,7 +10,7 @@ import { analyzeImagesBatch, matchImagesToParagraphs } from "./imageMatching"
 import { searchNaverPlace } from "./naverLocalSearch"
 import { extractNaverPlaceId, fetchNaverPlaceDetail, fetchNaverPlacePhotos } from "./naverPlaceDetail"
 import { inferFacilityFromReviews } from "./naverReviewSearch"
-import { findExteriorImageViaSearch } from "./thumbnail"
+import { findExteriorImageViaSearch, findMenuImageViaSearch } from "./thumbnail"
 import { extractLinkLabel } from "./naverDraftParser"
 import { withRetry, shouldTryNextModel } from "./geminiRetry"
 import { generateGroqText } from "./groqClient"
@@ -270,19 +270,26 @@ async function buildVerifiedPlaceInfoText(
 
   const lines = [`- 상호명: ${place.name ?? "(확인 안 됨)"}`, `- 주소: ${address}`]
   if (place.telephone) lines.push(`- 전화: ${place.telephone}`)
-  if (place.businessHours) lines.push(`- 영업시간: ${place.businessHours}`)
   if (place.conveniences?.length) lines.push(`- 편의시설: ${place.conveniences.join(", ")}`)
 
-  // 네이버 지도 상세 페이지에 화장실 정보가 없으면(conveniences에 언급 없음), 블로그
-  // 리뷰 검색으로 보수적으로 보완한다. 공식 정보가 아니므로 "리뷰 기준"으로 명확히
+  // 네이버 지도 상세 페이지에서 확인 안 되는 정보(영업시간, 화장실)는 블로그 리뷰
+  // 검색으로 보수적으로 보완한다. 공식 정보가 아니므로 "리뷰 기준"으로 명확히
   // 출처를 표시해, 모델이 지도 확인 사실과 동일한 신뢰도로 오인하지 않게 한다.
+  const placeNameForInference = place.name ?? (linkLabel !== "지도에서 위치 보기" ? linkLabel : undefined)
+
+  // 영업시간은 매장 주요 정보에 반드시 포함해야 하는 항목(사용자 요청)이라, 공식
+  // 데이터에 없으면(페이지 구조상 자주 누락됨 — 실측 확인) 리뷰 검색으로라도 채운다.
+  if (place.businessHours) {
+    lines.push(`- 영업시간: ${place.businessHours}`)
+  } else if (placeNameForInference) {
+    const hoursNote = await inferFacilityFromReviews(apiKey, placeNameForInference, "영업시간")
+    if (hoursNote) lines.push(`- 영업시간(리뷰 기준, 참고용): ${hoursNote}`)
+  }
+
   const hasRestroomInfo = place.conveniences?.some((c) => c.includes("화장실"))
-  if (!hasRestroomInfo) {
-    const placeName = place.name ?? (linkLabel !== "지도에서 위치 보기" ? linkLabel : undefined)
-    if (placeName) {
-      const restroomNote = await inferFacilityFromReviews(apiKey, placeName, "화장실")
-      if (restroomNote) lines.push(`- 화장실(리뷰 기준, 참고용): ${restroomNote}`)
-    }
+  if (!hasRestroomInfo && placeNameForInference) {
+    const restroomNote = await inferFacilityFromReviews(apiKey, placeNameForInference, "화장실")
+    if (restroomNote) lines.push(`- 화장실(리뷰 기준, 참고용): ${restroomNote}`)
   }
 
   return {
@@ -349,6 +356,22 @@ function getVisualParagraphCandidates(paragraphs: string[]): number[] {
   })
   return candidates
 }
+
+// "메뉴판 ▼" 같은 소제목 문단을 찾아, 그 바로 다음에 오는 첫 후보 문단을 반환한다.
+// 메뉴판 사진은 정확히 이 소제목 근처에 있어야 자연스러우므로, 균등 배치가 아니라
+// 소제목 위치를 기준으로 강제 배치한다. 소제목을 못 찾으면 undefined를 반환해
+// 호출부가 일반 폴백(picker)을 쓰도록 한다.
+function findCandidateAfterHeading(
+  paragraphs: string[],
+  candidates: number[],
+  headingPattern: RegExp
+): number | undefined {
+  const headingIndex = paragraphs.findIndex((p) => headingPattern.test(p.trim()))
+  if (headingIndex === -1) return undefined
+  return candidates.find((c) => c > headingIndex)
+}
+
+const MENU_HEADING_PATTERN = /^메뉴(판)?\s*▼?$/
 
 // 문단별 사진 배치 개수를 추적해, 아직 사진이 없는 후보 문단을 우선 고르는 헬퍼를 만든다.
 // "사진 개수만큼 문단을 나눠 쓰라"는 프롬프트 지시로 후보 문단 수가 사진 개수보다 많아지는
@@ -701,19 +724,55 @@ async function insertImages(
     picker.markUsed(candidates[0])
   }
 
-  // 나머지 첨부 사진(리드로 뽑히지 않은 것)은 위치 순서가 아니라 캡션 키워드 겹침으로
-  // 배치한다 — 균등 간격 배치는 "우니초밥을 얘기하는 문단에 엉뚱한 사진이 붙는" 사고의
-  // 원인이었다. 매칭이 실패해도(캡션 없음, 겹치는 키워드 없음 등) 첨부 사진은 반드시
-  // 결과에 포함해야 하므로(전부 포함 불변식), 아직 사진이 없는 후보 문단을 우선 고르는
-  // picker를 폴백으로 쓴다. 리드 사진이 이미 candidates[0]을 썼으므로, 매칭 후보
-  // 목록에서도 그 문단을 미리 제외해 매칭 단계가 리드 자리를 다시 차지하지 않게 한다.
+  // 메뉴판 사진도 대표(외관) 사진과 동일한 원칙으로 반드시 포함시킨다(사용자 요청) —
+  // 첨부 중 메뉴판으로 판별된 사진이 있으면 그걸 쓰고, 없으면 findMenuImageViaSearch로
+  // 찾는다(placeId가 있으면 검증된 매장 사진 우선, 없으면 텍스트 검색 폴백 — 외관과
+  // 동일한 신뢰도 원칙). "메뉴판 ▼" 소제목 문단을 찾을 수 있으면 그 바로 다음 후보
+  // 문단에 강제 배치해 소제목과 사진이 자연스럽게 붙도록 한다.
+  const menuFromAttachmentIndex = analyses.findIndex((a) => a.isMenu)
+  const menuFromAttachment =
+    menuFromAttachmentIndex >= 0 ? attachments[menuFromAttachmentIndex] : undefined
+  let menuImageUrl: string | undefined = menuFromAttachment?.url
+  let menuFromSearch = false
+
+  if (!menuImageUrl && !allowAiFallback && attachments.length > 0) {
+    const searched = await findMenuImageViaSearch(apiKey, placeName ?? post.title, placeId)
+    if (searched) {
+      menuImageUrl = searched
+      menuFromSearch = true
+    }
+  }
+
+  let menuParagraphIndex: number | undefined
+  if (menuImageUrl) {
+    menuParagraphIndex =
+      findCandidateAfterHeading(paragraphs, candidates, MENU_HEADING_PATTERN) ?? picker.pick()
+    appendImageMarker(menuParagraphIndex, menuImageUrl)
+    picker.markUsed(menuParagraphIndex)
+  }
+
+  // 나머지 첨부 사진(리드/메뉴판으로 뽑히지 않은 것)은 위치 순서가 아니라 캡션 키워드
+  // 겹침으로 배치한다 — 균등 간격 배치는 "우니초밥을 얘기하는 문단에 엉뚱한 사진이
+  // 붙는" 사고의 원인이었다. 매칭이 실패해도(캡션 없음, 겹치는 키워드 없음 등) 첨부
+  // 사진은 반드시 결과에 포함해야 하므로(전부 포함 불변식), 아직 사진이 없는 후보
+  // 문단을 우선 고르는 picker를 폴백으로 쓴다. 리드/메뉴판 사진이 이미 문단을 썼으므로,
+  // 매칭 후보 목록에서도 그 문단들을 미리 제외해 매칭 단계가 그 자리를 다시 차지하지
+  // 않게 한다.
   const matchableEntries = attachments
     .map((attachment, i) => ({ attachment, analysis: analyses[i] }))
-    .filter(({ attachment }) => attachment.url !== leadFromAttachment?.url)
+    .filter(
+      ({ attachment }) =>
+        attachment.url !== leadFromAttachment?.url && attachment.url !== menuFromAttachment?.url
+    )
 
   if (matchableEntries.length > 0) {
+    const reservedParagraphs = new Set(
+      [leadImageUrl ? candidates[0] : undefined, menuParagraphIndex].filter(
+        (v): v is number => v !== undefined
+      )
+    )
     const candidateParagraphs = candidates
-      .filter((index) => !leadImageUrl || index !== candidates[0])
+      .filter((index) => !reservedParagraphs.has(index))
       .map((index) => ({ index, text: paragraphs[index] }))
     const matchedIndexes = matchImagesToParagraphs(
       matchableEntries.map(({ analysis }) => ({ caption: analysis.caption })),
@@ -727,9 +786,13 @@ async function insertImages(
   }
 
   // STEP 3: 부족분(검색/AI 생성)으로 채운다 — 아직 사진이 없는 후보 문단을 우선으로 고른다.
-  // 리드 사진을 검색으로 찾았다면(leadFromSearch) 그만큼 부족분 슬롯을 하나 줄인다(이미
-  // 한 자리를 채웠으므로 전체 이미지 개수가 카테고리 목표치와 계속 일치하게 한다).
-  const effectiveShortfall = Math.max(shortfall - (leadFromSearch ? 1 : 0), 0)
+  // 리드/메뉴판 사진을 검색으로 찾았다면(leadFromSearch/menuFromSearch) 그만큼 부족분
+  // 슬롯을 줄인다(이미 그 자리들을 채웠으므로 전체 이미지 개수가 카테고리 목표치와
+  // 계속 일치하게 한다).
+  const effectiveShortfall = Math.max(
+    shortfall - (leadFromSearch ? 1 : 0) - (menuFromSearch ? 1 : 0),
+    0
+  )
   const shortfallPoints: number[] = []
   for (let i = 0; i < effectiveShortfall; i++) {
     const pick = picker.pick()

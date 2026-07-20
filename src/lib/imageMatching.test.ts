@@ -20,21 +20,43 @@ describe("imageMatching", () => {
         { url: "https://example.com/1.jpg", existingLabel: "가게 외관 사진" },
       ])
 
-      expect(result).toEqual([{ caption: "가게 외관 사진", isExterior: true }])
+      expect(result).toEqual([{ caption: "가게 외관 사진", isExterior: true, isMenu: false }])
+      expect(runVisionPromptBatchMock).not.toHaveBeenCalled()
+    })
+
+    it("라벨에 메뉴판 관련 단어가 있으면 비전 호출 없이 메뉴판으로 판정한다", async () => {
+      const result = await analyzeImagesBatch("test-key", [
+        { url: "https://example.com/1.jpg", existingLabel: "메뉴판 사진" },
+      ])
+
+      expect(result).toEqual([{ caption: "메뉴판 사진", isExterior: false, isMenu: true }])
       expect(runVisionPromptBatchMock).not.toHaveBeenCalled()
     })
 
     it("라벨이 파일명 패턴(의미 없음)이면 비전 배치 호출로 캡션을 생성한다", async () => {
       runVisionPromptBatchMock.mockResolvedValueOnce({
         successIndexes: [0],
-        text: "1) 우니, 초밥, 클로즈업 | 아니오",
+        text: "1) 우니, 초밥, 클로즈업 | 아니오 | 아니오",
       })
 
       const result = await analyzeImagesBatch("test-key", [
         { url: "https://example.com/1.jpg", existingLabel: "20180206_195520.jpg" },
       ])
 
-      expect(result).toEqual([{ caption: "우니, 초밥, 클로즈업", isExterior: false }])
+      expect(result).toEqual([{ caption: "우니, 초밥, 클로즈업", isExterior: false, isMenu: false }])
+    })
+
+    it("비전 배치 응답에서 메뉴판 여부(두 번째 예/아니오)도 함께 파싱한다", async () => {
+      runVisionPromptBatchMock.mockResolvedValueOnce({
+        successIndexes: [0],
+        text: "1) 메뉴판, 가격표 | 아니오 | 예",
+      })
+
+      const result = await analyzeImagesBatch("test-key", [
+        { url: "https://example.com/1.jpg", existingLabel: "20180206_195520.jpg" },
+      ])
+
+      expect(result).toEqual([{ caption: "메뉴판, 가격표", isExterior: false, isMenu: true }])
     })
 
     it("영문자가 섞인 메신저/카메라 앱 자동 파일명(예: 카카오톡 전송 파일명)도 의미 없는 라벨로 판정해 비전 배치 호출로 캡션을 생성한다 (회귀 테스트)", async () => {
@@ -43,7 +65,7 @@ describe("imageMatching", () => {
       // 항상 false가 되는 사고로 이어졌다(실측 확인).
       runVisionPromptBatchMock.mockResolvedValueOnce({
         successIndexes: [0],
-        text: "1) 가게 외관, 간판 | 예",
+        text: "1) 가게 외관, 간판 | 예 | 아니오",
       })
 
       const result = await analyzeImagesBatch("test-key", [
@@ -51,18 +73,18 @@ describe("imageMatching", () => {
       ])
 
       expect(runVisionPromptBatchMock).toHaveBeenCalledTimes(1)
-      expect(result).toEqual([{ caption: "가게 외관, 간판", isExterior: true }])
+      expect(result).toEqual([{ caption: "가게 외관, 간판", isExterior: true, isMenu: false }])
     })
 
     it("여러 장을 배치 크기(5장) 단위로 나눠 여러 번 호출한다", async () => {
       runVisionPromptBatchMock
         .mockResolvedValueOnce({
           successIndexes: [0, 1, 2, 3, 4],
-          text: "1) a | 아니오\n2) b | 아니오\n3) c | 아니오\n4) d | 아니오\n5) e | 아니오",
+          text: "1) a | 아니오 | 아니오\n2) b | 아니오 | 아니오\n3) c | 아니오 | 아니오\n4) d | 아니오 | 아니오\n5) e | 아니오 | 아니오",
         })
         .mockResolvedValueOnce({
           successIndexes: [0],
-          text: "1) f | 예",
+          text: "1) f | 예 | 아니오",
         })
 
       const images = Array.from({ length: 6 }, (_, i) => ({ url: `https://example.com/${i}.jpg` }))
@@ -70,7 +92,7 @@ describe("imageMatching", () => {
 
       expect(runVisionPromptBatchMock).toHaveBeenCalledTimes(2)
       expect(result).toHaveLength(6)
-      expect(result[5]).toEqual({ caption: "f", isExterior: true })
+      expect(result[5]).toEqual({ caption: "f", isExterior: true, isMenu: false })
     })
 
     it("배치 호출이 완전히 실패해도(text: null) 전체를 버리지 않고 빈 캡션으로 폴백한다", async () => {
@@ -82,8 +104,8 @@ describe("imageMatching", () => {
       ])
 
       expect(result).toEqual([
-        { caption: "", isExterior: false },
-        { caption: "", isExterior: false },
+        { caption: "", isExterior: false, isMenu: false },
+        { caption: "", isExterior: false, isMenu: false },
       ])
     })
 
@@ -91,7 +113,7 @@ describe("imageMatching", () => {
       runVisionPromptBatchMock.mockResolvedValueOnce({
         successIndexes: [0, 1],
         // 2번째 줄은 형식이 깨져 파싱되지 않음
-        text: "1) 라떼, 커피잔 | 아니오\n형식이 깨진 줄",
+        text: "1) 라떼, 커피잔 | 아니오 | 아니오\n형식이 깨진 줄",
       })
 
       const result = await analyzeImagesBatch("test-key", [
@@ -99,8 +121,8 @@ describe("imageMatching", () => {
         { url: "https://example.com/2.jpg" },
       ])
 
-      expect(result[0]).toEqual({ caption: "라떼, 커피잔", isExterior: false })
-      expect(result[1]).toEqual({ caption: "", isExterior: false })
+      expect(result[0]).toEqual({ caption: "라떼, 커피잔", isExterior: false, isMenu: false })
+      expect(result[1]).toEqual({ caption: "", isExterior: false, isMenu: false })
     })
   })
 
