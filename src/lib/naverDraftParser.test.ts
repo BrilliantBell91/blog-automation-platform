@@ -31,6 +31,29 @@ describe("parseNaverDraft", () => {
     ])
   })
 
+  it("마커가 앞 텍스트와 같은 문단에 줄바꿈으로 붙어있으면 텍스트와 마커를 분리한다 (회귀 테스트)", () => {
+    // 실측 확인된 사고: LLM이 "위치는 요기 ▼"와 [참고링크...] 마커를 지시(별도 문단으로
+    // 분리)를 어기고 같은 문단에 줄바꿈만으로 붙여 써서, 마커가 문단 맨 앞에 오지 않아
+    // 파싱에 실패하고 마커 원본 텍스트가 그대로 노출됐다.
+    const content =
+      "위치는 요기 ▼\n[참고링크 - 지도/메뉴/리뷰 등 실제로 확인되는 내용만 반영: https://map.naver.com/p/123]"
+    const blocks = parseNaverDraft(content)
+    expect(blocks).toEqual([
+      { type: "paragraph", text: "위치는 요기 ▼" },
+      { type: "link", url: "https://map.naver.com/p/123", label: "지도에서 위치 보기" },
+    ])
+  })
+
+  it("사진 마커가 앞 텍스트와 같은 문단에 붙어있어도 텍스트와 이미지를 분리한다 (회귀 테스트)", () => {
+    const content =
+      "매장 내부 사진이에요\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://example.com/a.jpg]"
+    const blocks = parseNaverDraft(content)
+    expect(blocks).toEqual([
+      { type: "paragraph", text: "매장 내부 사진이에요" },
+      { type: "image", url: "https://example.com/a.jpg", caption: undefined },
+    ])
+  })
+
   it("지도 URL의 searchText 쿼리에서 장소명을 라벨로 추출한다", () => {
     const content =
       "[참고링크 - 지도/메뉴/리뷰 등 실제로 확인되는 내용만 반영: https://map.naver.com/p/search/place?searchText=%EB%B6%80%ED%8F%89%20%EC%9D%B4%EC%9E%90%EC%B9%B4%EC%95%BC]"

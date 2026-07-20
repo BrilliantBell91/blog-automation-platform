@@ -338,7 +338,12 @@ function getVisualParagraphCandidates(paragraphs: string[]): number[] {
   paragraphs.forEach((raw, i) => {
     const p = raw.trim()
     if (i === 0 || i === paragraphs.length - 1) return
-    if (!p || p.startsWith(">") || p.startsWith("#") || MARKER_PARAGRAPH.test(p)) return
+    if (!p || p.startsWith(">") || p.startsWith("#")) return
+    // 마커가 문단 맨 앞에 있는 흔한 경우뿐 아니라, LLM이 지시를 어기고 앞 텍스트와
+    // 마커를 같은 문단에 줄바꿈으로 붙여 쓴 경우(예: "위치는 요기 ▼\n[참고링크...]")도
+    // 후보에서 제외한다 — 이런 문단에 사진 마커까지 추가로 붙이면 텍스트+링크+사진이
+    // 뒤섞여 더 혼란스러워지는 사고가 실측 확인됐다.
+    if (p.includes("[사진 원본") || p.includes("[참고링크")) return
     if (p.length < MIN_VISUAL_PARAGRAPH_LENGTH) return
     candidates.push(i)
   })
@@ -698,16 +703,18 @@ async function insertImages(
 
   // 나머지 첨부 사진(리드로 뽑히지 않은 것)은 위치 순서가 아니라 캡션 키워드 겹침으로
   // 배치한다 — 균등 간격 배치는 "우니초밥을 얘기하는 문단에 엉뚱한 사진이 붙는" 사고의
-  // 원인이었다. 비슷한 캡션의 사진들은 같은 문단으로 몰려 자연히 인접 배치(그룹핑)된다.
-  // 매칭이 실패해도(캡션 없음, 겹치는 키워드 없음 등) 첨부 사진은 반드시 결과에 포함해야
-  // 하므로(전부 포함 불변식), 아직 사진이 없는 후보 문단을 우선 고르는 picker를 폴백으로
-  // 쓴다(리드 사진이 이미 candidates[0]을 썼으므로 picker가 자연히 다른 후보를 고른다).
+  // 원인이었다. 매칭이 실패해도(캡션 없음, 겹치는 키워드 없음 등) 첨부 사진은 반드시
+  // 결과에 포함해야 하므로(전부 포함 불변식), 아직 사진이 없는 후보 문단을 우선 고르는
+  // picker를 폴백으로 쓴다. 리드 사진이 이미 candidates[0]을 썼으므로, 매칭 후보
+  // 목록에서도 그 문단을 미리 제외해 매칭 단계가 리드 자리를 다시 차지하지 않게 한다.
   const matchableEntries = attachments
     .map((attachment, i) => ({ attachment, analysis: analyses[i] }))
     .filter(({ attachment }) => attachment.url !== leadFromAttachment?.url)
 
   if (matchableEntries.length > 0) {
-    const candidateParagraphs = candidates.map((index) => ({ index, text: paragraphs[index] }))
+    const candidateParagraphs = candidates
+      .filter((index) => !leadImageUrl || index !== candidates[0])
+      .map((index) => ({ index, text: paragraphs[index] }))
     const matchedIndexes = matchImagesToParagraphs(
       matchableEntries.map(({ analysis }) => ({ caption: analysis.caption })),
       candidateParagraphs

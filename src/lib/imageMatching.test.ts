@@ -130,5 +130,33 @@ describe("imageMatching", () => {
       const result = matchImagesToParagraphs([{ caption: "우니" }], [])
       expect(result).toEqual([null])
     })
+
+    it("캡션이 비슷해 겹치는 문단이 같아도, 이미 배정된 문단은 재사용하지 않고 다른 문단으로 분산한다 (회귀 테스트)", () => {
+      // 실측 확인된 사고: 사진 3장의 캡션이 모두 "초밥" 키워드를 포함하면 소프트
+      // 페널티만으로는 충분히 안 갈라져 한 문단에 사진이 2~3장씩 몰렸다("짧은 문단
+      // 하나에 사진 하나"라는 요구와 정반대). 이제는 이미 배정된 문단을 하드 제외해,
+      // 후보 문단 수가 충분하면 서로 다른 문단에 1장씩 퍼져야 한다.
+      const result = matchImagesToParagraphs(
+        [{ caption: "초밥, 참치" }, { caption: "초밥, 우니" }, { caption: "초밥, 계란찜" }],
+        [
+          { index: 1, text: "오늘의 초밥 코스를 소개합니다" },
+          { index: 2, text: "초밥과 곁들인 계란찜도 나왔다" },
+          { index: 3, text: "마지막으로 초밥 한 점 더" },
+        ]
+      )
+
+      expect(result.every((r) => r !== null)).toBe(true)
+      expect(new Set(result).size).toBe(3) // 세 사진이 각각 다른 문단에 배정됨
+    })
+
+    it("후보 문단보다 사진이 많으면, 다 채운 뒤 넘치는 사진은 매칭 실패(null)로 폴백에 넘긴다", () => {
+      const result = matchImagesToParagraphs(
+        [{ caption: "초밥" }, { caption: "초밥" }, { caption: "초밥" }],
+        [{ index: 1, text: "초밥 이야기" }]
+      )
+
+      expect(result.filter((r) => r !== null)).toHaveLength(1)
+      expect(result.filter((r) => r === null)).toHaveLength(2)
+    })
   })
 })

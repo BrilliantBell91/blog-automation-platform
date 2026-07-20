@@ -95,25 +95,58 @@ export function refreshDraftImageUrls(content: string, attachments: LlmAttachmen
   if (freshByPath.size === 0) return content
 
   const paragraphs = content.split("\n\n")
-  const updated = paragraphs.map((paragraph) => {
-    const match = paragraph.match(PHOTO_MARKER)
-    if (!match) return paragraph
+  const updated = paragraphs.map((paragraph) =>
+    paragraph
+      .split("\n")
+      .map((line) => {
+        const match = line.match(PHOTO_MARKER)
+        if (!match) return line
 
-    const staleUrl = match[1]
-    const path = urlPath(staleUrl)
-    const freshUrl = path ? freshByPath.get(path) : undefined
-    if (!freshUrl || freshUrl === staleUrl) return paragraph
+        const staleUrl = match[1]
+        const path = urlPath(staleUrl)
+        const freshUrl = path ? freshByPath.get(path) : undefined
+        if (!freshUrl || freshUrl === staleUrl) return line
 
-    return paragraph.replace(staleUrl, freshUrl)
-  })
+        return line.replace(staleUrl, freshUrl)
+      })
+      .join("\n")
+  )
 
   return updated.join("\n\n")
+}
+
+// 마커가 섞이지 않은 순수 텍스트 조각을 hashtags/quote/paragraph 블록으로 분류한다.
+// parseNaverDraft 본체와 줄 단위 마커 분리 로직 양쪽에서 재사용한다.
+function classifyTextChunk(text: string): NaverDraftBlock[] {
+  const trimmed = text.trim()
+  if (!trimmed) return []
+
+  const tags = isHashtagLine(trimmed)
+  if (tags) {
+    return [{ type: "hashtags", tags }]
+  }
+
+  const quoteLines = isQuoteBlock(trimmed)
+  if (quoteLines) {
+    return [{ type: "quote", lines: quoteLines }]
+  }
+
+  const split = splitLeadingQuoteLine(trimmed)
+  if (split) {
+    return [
+      { type: "quote", lines: [split.heading] },
+      { type: "paragraph", text: split.rest },
+    ]
+  }
+
+  return [{ type: "paragraph", text: trimmed }]
 }
 
 export function parseNaverDraft(content: string): NaverDraftBlock[] {
   const paragraphs = content.split("\n\n").map((p) => p.trim()).filter(Boolean)
 
   return paragraphs.flatMap((paragraph): NaverDraftBlock[] => {
+    // 문단 전체가 마커/URL 하나뿐인 가장 흔한 경우는 빠르게 처리
     const photoMatch = paragraph.match(PHOTO_MARKER)
     if (photoMatch) {
       const [, url, trailing] = photoMatch
@@ -130,25 +163,57 @@ export function parseNaverDraft(content: string): NaverDraftBlock[] {
       return [{ type: "link", url: bareUrlMatch[1], label: extractLinkLabel(bareUrlMatch[1]) }]
     }
 
-    const tags = isHashtagLine(paragraph)
-    if (tags) {
-      return [{ type: "hashtags", tags }]
+    // LLM이 "마커 형식을 그대로 유지하라"는 지시를 어기고 마커를 앞 텍스트와 같은
+    // 문단에 줄바꿈만으로 붙여 쓰는 경우가 실측 확인됐다(예: "위치는 요기 ▼\n[참고링크
+    // ...]"). 문단 전체가 마커 하나뿐이 아니면, 줄 단위로 훑어 마커/URL인 줄만 따로
+    // 뽑아내고 나머지 텍스트는 원래 분류 로직(hashtag/quote/paragraph)에 그대로 맡긴다.
+    const lines = paragraph.split("\n")
+    const hasEmbeddedMarker = lines.some(
+      (line) => PHOTO_MARKER.test(line) || LINK_MARKER.test(line) || BARE_URL_LINE.test(line)
+    )
+    if (hasEmbeddedMarker) {
+      const blocks: NaverDraftBlock[] = []
+      let textLines: string[] = []
+      const flushText = () => {
+        blocks.push(...classifyTextChunk(textLines.join("\n")))
+        textLines = []
+      }
+
+      for (const line of lines) {
+        const linePhotoMatch = line.match(PHOTO_MARKER)
+        const lineLinkMatch = line.match(LINK_MARKER)
+        const lineBareUrlMatch = line.match(BARE_URL_LINE)
+
+        if (linePhotoMatch) {
+          flushText()
+          blocks.push({
+            type: "image",
+            url: linePhotoMatch[1],
+            caption: linePhotoMatch[2].trim() || undefined,
+          })
+        } else if (lineLinkMatch) {
+          flushText()
+          blocks.push({
+            type: "link",
+            url: lineLinkMatch[1],
+            label: extractLinkLabel(lineLinkMatch[1]),
+          })
+        } else if (lineBareUrlMatch) {
+          flushText()
+          blocks.push({
+            type: "link",
+            url: lineBareUrlMatch[1],
+            label: extractLinkLabel(lineBareUrlMatch[1]),
+          })
+        } else {
+          textLines.push(line)
+        }
+      }
+      flushText()
+      return blocks
     }
 
-    const quoteLines = isQuoteBlock(paragraph)
-    if (quoteLines) {
-      return [{ type: "quote", lines: quoteLines }]
-    }
-
-    const split = splitLeadingQuoteLine(paragraph)
-    if (split) {
-      return [
-        { type: "quote", lines: [split.heading] },
-        { type: "paragraph", text: split.rest },
-      ]
-    }
-
-    return [{ type: "paragraph", text: paragraph }]
+    return classifyTextChunk(paragraph)
   })
 }
 

@@ -1033,6 +1033,39 @@ describe("llm", () => {
       expect(randomMarkerIndex).toBeGreaterThan(secondParagraphIndex)
     })
 
+    it("다른 첨부 사진의 캡션이 리드 사진 문단과 진짜로 겹쳐도, 매칭 후보에서 리드 문단이 미리 제외돼 다른 문단으로 배치된다 (회귀 테스트)", async () => {
+      // 리드 사진이 이미 candidates[0]을 차지했는데, 다른 첨부 사진의 캡션이 우연히
+      // candidates[0] 문단 텍스트와 키워드가 겹치면(매칭 실패가 아니라 진짜 매칭 성공),
+      // 소프트 페널티만으로는 여전히 리드 문단이 선택될 수 있었다. 매칭 후보 목록
+      // 자체에서 리드가 쓴 문단을 미리 빼야, 진짜 매칭이 성공하는 경우에도 리드 자리와
+      // 겹치지 않는다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n오늘은 우니초밥 먹으러 왔어요 정말 맛있었고 아주 신선하고 좋았습니다.\n\n디저트로 아이스크림도 나왔는데 부드럽고 좋았습니다.\n\n마무리 인사.",
+      })
+
+      const { content: result, leadImageUrl } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/exterior.jpg", label: "가게 외관" },
+          // 캡션이 "우니초밥"을 포함해 리드 사진이 이미 차지한 candidates[0](우니초밥
+          // 문단)과 진짜로 키워드가 겹친다.
+          { kind: "image", url: "https://s3.example.com/uni.jpg", label: "우니초밥 클로즈업" },
+        ],
+      })
+
+      const uniParagraphIndex = result.indexOf("오늘은 우니초밥")
+      const dessertParagraphIndex = result.indexOf("디저트로 아이스크림")
+      const exteriorMarkerIndex = result.indexOf("https://s3.example.com/exterior.jpg")
+      const uniMarkerIndex = result.indexOf("https://s3.example.com/uni.jpg")
+
+      expect(leadImageUrl).toBe("https://s3.example.com/exterior.jpg")
+      expect(exteriorMarkerIndex).toBeGreaterThan(uniParagraphIndex)
+      expect(exteriorMarkerIndex).toBeLessThan(dessertParagraphIndex)
+      // 우니초밥 사진은 캡션이 진짜로 겹쳐도 리드 문단이 아니라 다음 문단(디저트) 뒤로 밀린다
+      expect(uniMarkerIndex).toBeGreaterThan(dessertParagraphIndex)
+    })
+
     it("첨부 사진은 위치 순서가 아니라 캡션 키워드가 겹치는 문단에 매칭된다", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock.mockResolvedValueOnce({

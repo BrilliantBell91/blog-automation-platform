@@ -119,17 +119,21 @@ function keywordOverlapScore(captionTokens: string[], paragraphText: string): nu
 
 // 이미지 각각을 캡션 키워드가 가장 많이 겹치는 문단에 독립적으로 배정한다. 겹치는
 // 키워드가 하나도 없으면(bestScore <= 0) 매칭 실패로 보고 null을 반환해, 호출부가
-// 폴백 위치를 쓰도록 한다. crowdingPenalty로 이미 선택된 문단에 누적 페널티를 줘서
-// 무관한 사진들까지 전부 한 문단으로 쏠리는 것은 막되, 캡션이 비슷한(=겹침이 큰)
-// 사진들은 같은 문단으로 몰려 자연히 인접 배치(그룹핑)되는 효과가 남는다.
+// 폴백 위치를 쓰도록 한다. 이미 배정된 문단은(다른 미배정 문단에 조금이라도 겹치는
+// 키워드가 있는 한) 하드하게 재사용하지 않는다 — 예전에는 소프트 페널티(재사용 시
+// 누적 감점)만 있어서, 여러 사진의 캡션이 서로 비슷하게 겹치면 결국 한 문단에 사진이
+// 2~3장씩 몰리는 사고가 실측 확인됐다(원래는 "비슷한 사진끼리 자연히 그룹핑"을
+// 의도한 설계였지만, "짧은 문단 하나에 사진 하나"라는 요구와 상충했다). 후보 문단
+// 수가 사진 수만큼 충분하면(이 프로젝트 실측 케이스: 후보 18개/사진 15장) 하드 제외로
+// 거의 항상 1:1로 퍼진다. 후보가 사진보다 적어 다 채우고 나면 그 이후 이미지는
+// 매칭 실패(null) 처리되어 호출부의 최소사용 폴백으로 넘어간다.
 export function matchImagesToParagraphs(
   images: { caption: string }[],
-  candidateParagraphs: { index: number; text: string }[],
-  crowdingPenalty = 0.15
+  candidateParagraphs: { index: number; text: string }[]
 ): (number | null)[] {
   if (candidateParagraphs.length === 0) return images.map(() => null)
 
-  const usageCount = new Map<number, number>()
+  const used = new Set<number>()
 
   return images.map((image) => {
     const tokens = tokenize(image.caption)
@@ -138,8 +142,8 @@ export function matchImagesToParagraphs(
     let best: { index: number; text: string } | null = null
     let bestScore = -Infinity
     for (const paragraph of candidateParagraphs) {
-      const penalty = (usageCount.get(paragraph.index) ?? 0) * crowdingPenalty
-      const score = keywordOverlapScore(tokens, paragraph.text) - penalty
+      if (used.has(paragraph.index)) continue
+      const score = keywordOverlapScore(tokens, paragraph.text)
       if (score > bestScore) {
         bestScore = score
         best = paragraph
@@ -147,7 +151,7 @@ export function matchImagesToParagraphs(
     }
     if (!best || bestScore <= 0) return null
 
-    usageCount.set(best.index, (usageCount.get(best.index) ?? 0) + 1)
+    used.add(best.index)
     return best.index
   })
 }
