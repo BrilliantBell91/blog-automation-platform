@@ -432,6 +432,33 @@ function trimHeadAndTail(candidates: number[]): number[] {
   return trimmed.length >= MIN_MIDDLE_CANDIDATES ? trimmed : candidates
 }
 
+// "매장 내부 ▼" 소제목 구간은 분위기/인테리어 잡담이라 특정 음식과 무관한데, 그 사진이
+// 캡션 매칭에도 실패하고 형제 그룹도 없으면(예: 본문에 아예 언급되지 않은 코스) 위치
+// 기반 폴백이 아무 빈 자리나 골라 이 구간에 음식 사진이 떨어지는 사고가 실측
+// 확인됐다("생선구이" 사진이 "매장 내부" 잡담 문단에 배치됨). 이 구간의 문단은 나머지
+// 첨부 사진 배치 후보에서 아예 제외한다.
+const STORE_INTERIOR_HEADING_PATTERN = /^매장\s*내부\s*▼?$/
+const ANY_HEADING_PATTERN = /▼\s*$/
+
+function excludeHeadingSection(
+  candidates: number[],
+  paragraphs: string[],
+  headingPattern: RegExp
+): number[] {
+  const headingIndex = paragraphs.findIndex((p) => headingPattern.test(p.trim()))
+  if (headingIndex === -1) return candidates
+
+  const nextHeadingIndex = paragraphs.findIndex(
+    (p, i) =>
+      i > headingIndex &&
+      ANY_HEADING_PATTERN.test(p.trim()) &&
+      p.trim().length < MIN_VISUAL_PARAGRAPH_LENGTH
+  )
+  const sectionEnd = nextHeadingIndex === -1 ? paragraphs.length : nextHeadingIndex
+
+  return candidates.filter((index) => index <= headingIndex || index >= sectionEnd)
+}
+
 // 문단별 사진 배치 개수를 추적해, 아직 사진이 없는 후보 문단을 우선 고르는 헬퍼를 만든다.
 // "사진 개수만큼 문단을 나눠 쓰라"는 프롬프트 지시로 후보 문단 수가 사진 개수보다 많아지는
 // 경우(실측 확인: 사진 14장에 후보 문단 18개), 고정된 균등 샘플링 방식은 샘플링에서 빠진
@@ -881,8 +908,12 @@ async function insertImages(
     const reservedParagraphs = new Set(
       [menuParagraphIndex].filter((v): v is number => v !== undefined)
     )
-    const basePool = candidates.filter((index) => !reservedParagraphs.has(index))
-    const middleCandidates = trimHeadAndTail(basePool)
+    const nonInteriorPool = excludeHeadingSection(
+      candidates.filter((index) => !reservedParagraphs.has(index)),
+      paragraphs,
+      STORE_INTERIOR_HEADING_PATTERN
+    )
+    const middleCandidates = trimHeadAndTail(nonInteriorPool)
     const candidateParagraphs = middleCandidates.map((index) => ({ index, text: paragraphs[index] }))
 
     const groupCaptions = groupSimilarImages(matchableEntries.map(({ analysis }) => analysis.caption)).map(

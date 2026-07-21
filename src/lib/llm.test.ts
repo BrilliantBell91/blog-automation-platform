@@ -1369,6 +1369,32 @@ describe("llm", () => {
       })
     })
 
+    it("본문 어디에도 언급되지 않아 매칭에 실패한 음식 사진이 '매장 내부' 잡담 구간에는 떨어지지 않는다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: 캡션이 문단 텍스트와 겹치지 않고(본문에 아예 언급 안 된 코스)
+      // 형제 그룹도 없는 사진은 위치 기반 폴백(spaced-gap picker)이 아무 빈 자리나
+      // 고르는데, 하필 "매장 내부" 소제목 구간(분위기/인테리어 잡담이라 음식 사진과
+      // 전혀 안 어울림)에 떨어졌다("생선구이" 사진이 매장 내부 잡담 문단에 배치됨).
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n매장 내부 ▼\n\n분위기가 아늑하고 좋았다 조명도 은은해서 마음에 들었음.\n\n사진으로 다 담지 못한 게 아쉬울 정도임.\n\n메뉴판 ▼\n\n다양한 메뉴가 알차게 구성되어 있었다.\n\n마무리 인사.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/grilled-fish.jpg", label: "생선구이 클로즈업" },
+        ],
+      })
+
+      const interiorHeadingIndex = result.indexOf("매장 내부 ▼")
+      const menuHeadingIndex = result.indexOf("메뉴판 ▼")
+      const interiorSection = result.slice(interiorHeadingIndex, menuHeadingIndex)
+
+      expect(interiorSection).not.toContain("[사진 원본")
+      // 전부 포함 불변식: 매칭 실패해도 본문 어딘가에는 반드시 포함된다
+      expect(result).toContain("https://s3.example.com/grilled-fish.jpg")
+    })
+
     it("첨부 사진이 많아도 도입부(첫 문단)와 마무리(끝 문단)에는 억지로 사진을 채우지 않는다 (회귀 테스트)", async () => {
       // 사용자 요청: "초반과 후반은 사진 밀도 규칙을 따를 필요 없다." getVisualParagraphCandidates가
       // 이미 문서의 맨 첫/맨 끝 문단은 후보에서 제외하므로, 그 두 문단에는 어떤 경로로도
