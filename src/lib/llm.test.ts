@@ -1454,6 +1454,80 @@ describe("llm", () => {
       expect(interiorSection).not.toContain("[사진 원본")
     })
 
+    it("'메뉴판 ▼' 바로 뒤에 '매장 내부 ▼'가 이어져도, 메뉴판 사진이 매장 내부 잡담 문단에 붙지 않는다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: findCandidateAfterHeading이 "메뉴판 ▼" 소제목을 찾은 뒤 그
+      // "다음 후보 문단"을 무조건 반환했는데, 그 사이에 "매장 내부 ▼"라는 다른
+      // 소제목이 끼어 있으면 그 후보는 사실 매장 내부 섹션 소속(분위기 잡담)이었다.
+      // 소제목 사이에 다른 소제목이 끼어 있으면 그 구간을 건너뛰어야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n메뉴판 ▼\n\n매장 내부 ▼\n\n분위기가 아늑하고 좋았다 조명도 은은해서 마음에 들었음.\n\n대화 나누기 편한 조용한 분위기였다.\n\n오늘은 초밥을 먹었는데 정말 신선하고 맛있었습니다.\n\n마무리 인사.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/menu.jpg", label: "메뉴판 사진" },
+        ],
+      })
+
+      const interiorParagraphIndex = result.indexOf("분위기가 아늑하고")
+      const sushiParagraphIndex = result.indexOf("오늘은 초밥을 먹었는데")
+      const interiorSection = result.slice(interiorParagraphIndex, sushiParagraphIndex)
+
+      expect(interiorSection).not.toContain("[사진 원본")
+      // 전부 포함 불변식: 메뉴판 사진은 매장 내부 구간이 아닌 다른 곳에 반드시 포함된다
+      expect(result).toContain("https://s3.example.com/menu.jpg")
+    })
+
+    it("'매장 내부' 소제목 구간 바로 다음 문단이라도, 캡션이 실제로 겹치면(계란찜 등) 정상적으로 매칭된다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: "매장 내부" 구간을 나머지 첨부 사진의 실제 매칭 후보에서도
+      // 통째로 미리 빼버려서, 계란찜 사진처럼 정확히 그 구간 바로 다음 문단과 캡션이
+      // 겹치는 진짜 매칭까지 함께 사라졌다("초반부 샐러드/계란찜 사진 누락" 신고). 매장
+      // 내부 구간 제외는 캡션 매칭에 실패한 사진의 위치 기반 폴백에서만 적용해야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n매장 내부 ▼\n\n분위기가 아늑하고 좋았다 조명도 은은해서 마음에 들었음.\n\n대화 나누기 편한 느낌이었다 조용한 편임.\n\n처음 시작은 상큼한 샐러드랑 보들보들한 계란찜이 나온다.\n\n마무리 인사.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/jeranjjim.jpg", label: "계란찜 클로즈업" },
+        ],
+      })
+
+      const jeranParagraphIndex = result.indexOf("처음 시작은 상큼한")
+      const jeranMarkerIndex = result.indexOf("https://s3.example.com/jeranjjim.jpg")
+
+      // 계란찜 사진은 매장 내부 구간 바로 다음이라도 실제 캡션이 겹치는 문단에 정확히 매칭된다
+      expect(jeranMarkerIndex).toBeGreaterThan(jeranParagraphIndex)
+    })
+
+    it("'[참고링크]' 대괄호 없이 맨 URL만 남긴 지도 문단에는 사진이 끼어들지 않는다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: LLM이 "[참고링크 - ...]" 마커 형식 없이 URL을 맨 텍스트로
+      // 남기면("위치는 요기 ▼\nhttps://map.naver.com/...") 대괄호 마커 검사를 통과해
+      // 일반 후보 문단으로 오인되고, 그 문단 뒤에 첨부 사진이 끼어드는 사고로 이어졌다
+      // ("위치는 요기 이후 이미지 첨부 오류").
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n위치는 요기 ▼\nhttps://map.naver.com/p/entry/place/1377140070\n\n그럼 다들 맛있는 하루 보내세요.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/random.jpg", label: "전혀 상관없는 잡담" },
+        ],
+      })
+
+      const mapParagraphIndex = result.indexOf("위치는 요기 ▼")
+      const closingIndex = result.indexOf("그럼 다들 맛있는 하루")
+      const mapSection = result.slice(mapParagraphIndex, closingIndex)
+
+      expect(mapSection).not.toContain("[사진 원본")
+    })
+
     it("인사말이 세 문단으로 쪼개져도(훅 문구가 세 번째 문단) 대표 사진이 인사말 중간에 끼어들지 않는다 (회귀 테스트)", async () => {
       // 실측 확인된 사고: "안녕하세요.." / "가성비 넘치는 구성으로.." / "간만에
       // 남편이랑.. 시작합니닷"처럼 인사말이 두 문단이 아니라 세 문단으로 쪼개지자,
