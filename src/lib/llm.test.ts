@@ -1395,6 +1395,68 @@ describe("llm", () => {
       expect(result).toContain("https://s3.example.com/grilled-fish.jpg")
     })
 
+    it("'메뉴판 ▼'이 '매장 내부 ▼'보다 먼저 나오고 그 뒤로 다른 소제목이 없어도 본문 전체가 통째로 제외되지 않는다 (회귀 테스트)", async () => {
+      // 실측 확인된 심각한 사고: "매장 내부 ▼" 다음에 다른 소제목("▼"로 끝나는 문단)이
+      // "위치는 요기 ▼"(마무리 지도 마커)까지 전혀 없는 구조가 나오면, 이전 수정이
+      // "다음 소제목"을 마무리 직전 줄로 오인해 본문 전체(수십 개 문단)를 나머지 첨부
+      // 사진 배치 후보에서 통째로 제외해버렸다. 그 결과 사진 전부가 도입부 근처 한
+      // 문단에 몰렸다. "매장 내부" 다음에 실제 소제목이 없으면 최대 3문단만 제외하고,
+      // 그 뒤 본문(초밥/참치 등 실제 음식 문단)은 정상적으로 후보에 남아있어야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n메뉴판 ▼\n\n매장 내부 ▼\n\n분위기가 아늑하고 좋았다 조명도 은은해서 마음에 들었음.\n\n오늘은 초밥을 먹었는데 정말 신선하고 맛있었습니다.\n\n디저트도 나왔는데 부드럽고 좋았습니다.\n\n마무리 인사.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/sushi.jpg", label: "초밥 클로즈업" },
+        ],
+      })
+
+      const interiorParagraphIndex = result.indexOf("분위기가 아늑하고")
+      const sushiParagraphIndex = result.indexOf("오늘은 초밥을 먹었는데")
+      const dessertParagraphIndex = result.indexOf("디저트도 나왔는데")
+
+      // 초밥 사진은 여전히 "초밥" 문단에 정확히 매칭돼야 한다(본문 전체가 제외되지 않았다는 증거)
+      const sushiMarkerIndex = result.indexOf("https://s3.example.com/sushi.jpg")
+      expect(sushiMarkerIndex).toBeGreaterThan(sushiParagraphIndex)
+      expect(sushiMarkerIndex).toBeLessThan(dessertParagraphIndex)
+      // "매장 내부" 문단 자체에는 여전히 사진이 끼어들지 않는다
+      const interiorSection = result.slice(interiorParagraphIndex, sushiParagraphIndex)
+      expect(interiorSection).not.toContain("[사진 원본")
+    })
+
+    it("인사말이 세 문단으로 쪼개져도(훅 문구가 세 번째 문단) 대표 사진이 인사말 중간에 끼어들지 않는다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: "안녕하세요.." / "가성비 넘치는 구성으로.." / "간만에
+      // 남편이랑.. 시작합니닷"처럼 인사말이 두 문단이 아니라 세 문단으로 쪼개지자,
+      // 문단[1]만 검사하던 이전 수정이 훅 문구를 놓쳐 대표 사진이 인사말 두 번째
+      // 문단과 세 번째 문단 사이에 끼어들었다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n가성비 넘치는 구성으로 배 터지게 먹고 온 부천 오마카세!\n\n간만에 남편이랑 오붓하게 외식하러 갔다 온 후기 지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+      })
+
+      const { content: result, leadImageUrl } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/exterior.jpg", label: "가게 외관" },
+        ],
+      })
+
+      const secondGreetingIndex = result.indexOf("가성비 넘치는 구성으로")
+      const thirdGreetingIndex = result.indexOf("간만에 남편이랑")
+      const firstParagraphIndex = result.indexOf("첫 번째 이야기입니다")
+      const exteriorMarkerIndex = result.indexOf("https://s3.example.com/exterior.jpg")
+
+      expect(leadImageUrl).toBe("https://s3.example.com/exterior.jpg")
+      // 인사말 세 문단 사이 어디에도 사진이 끼어들지 않는다
+      expect(result.slice(secondGreetingIndex, thirdGreetingIndex)).not.toContain("[사진 원본")
+      // 대표 사진은 인사말 세 문단이 모두 끝난 뒤, 첫 본문 문단보다 앞에 위치
+      expect(exteriorMarkerIndex).toBeGreaterThan(thirdGreetingIndex)
+      expect(exteriorMarkerIndex).toBeLessThan(firstParagraphIndex)
+    })
+
     it("첨부 사진이 많아도 도입부(첫 문단)와 마무리(끝 문단)에는 억지로 사진을 채우지 않는다 (회귀 테스트)", async () => {
       // 사용자 요청: "초반과 후반은 사진 밀도 규칙을 따를 필요 없다." getVisualParagraphCandidates가
       // 이미 문서의 맨 첫/맨 끝 문단은 후보에서 제외하므로, 그 두 문단에는 어떤 경로로도

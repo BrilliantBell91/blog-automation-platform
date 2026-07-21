@@ -399,19 +399,25 @@ const MENU_HEADING_PATTERN = /^메뉴(판)?\s*▼?$/
 // 문단이 되어 "메뉴판 아래 외관사진" 순서 오류로 이어졌다(실측 확인). 대표 사진은 후보
 // 목록에 의존하지 않고, 인사말 + 매장정보 인용구 블록 바로 다음(모든 소제목보다 앞)에
 // 독립된 문단으로 강제 삽입한다.
+// 인사말이 문단[0]에서 끝나지 않고 훅 문구가 몇 문단 뒤에 쪼개져 나오는 경우(위
+// GREETING_HOOK_PATTERN 설명 참고)를 대비해, 앞쪽 몇 문단까지만 훅 문구를 찾아본다.
+// 실측 확인된 사고: 인사말이 2문단이 아니라 3문단으로("안녕하세요.." / "가성비
+// 넘치는 구성으로.." / "간만에 남편이랑.. 시작합니닷") 쪼개진 경우, 문단[1]만 보던
+// 이전 버전은 훅 문구를 놓쳐 대표 사진이 인사말 중간에 끼어들었다. 문서 전체를 끝까지
+// 훑지는 않는다 — 훅 문구 자체가 없는 글에서까지 찾으려 들면 대표 사진이 문서 맨
+// 끝으로 밀려버리는 사고로 이어지므로, 검색 범위를 앞쪽 몇 문단으로 제한한다.
+const GREETING_SEARCH_WINDOW = 4
+
 function findLeadInsertionIndex(paragraphs: string[]): number {
   let idx = 1
-  // 인사말이 문단[0]에서 끝나지 않고 훅 문구가 바로 다음 문단에 쪼개져 나오는 경우(위
-  // GREETING_HOOK_PATTERN 설명 참고), 그 문단도 인사말의 연장으로 보고 건너뛴다.
-  // 문단[1]에도 훅 문구가 없으면(짧은 인사말이라 애초에 쪼개지지 않은 통상적인 경우)
-  // 문서 전체를 훑지 않고 기존처럼 문단[0]만 인사말로 본다 — 훅 문구 자체가 없는
-  // 글에서까지 찾으려 들면 대표 사진이 문서 맨 끝으로 밀려버리는 사고로 이어진다.
-  if (
-    !GREETING_HOOK_PATTERN.test(paragraphs[0] ?? "") &&
-    paragraphs[1] !== undefined &&
-    GREETING_HOOK_PATTERN.test(paragraphs[1])
-  ) {
-    idx = 2
+  if (!GREETING_HOOK_PATTERN.test(paragraphs[0] ?? "")) {
+    const windowEnd = Math.min(GREETING_SEARCH_WINDOW, paragraphs.length)
+    for (let i = 1; i < windowEnd; i++) {
+      if (GREETING_HOOK_PATTERN.test(paragraphs[i])) {
+        idx = i + 1
+        break
+      }
+    }
   }
   while (idx < paragraphs.length && paragraphs[idx].trim().startsWith(">")) idx++
   return idx
@@ -436,9 +442,22 @@ function trimHeadAndTail(candidates: number[]): number[] {
 // 캡션 매칭에도 실패하고 형제 그룹도 없으면(예: 본문에 아예 언급되지 않은 코스) 위치
 // 기반 폴백이 아무 빈 자리나 골라 이 구간에 음식 사진이 떨어지는 사고가 실측
 // 확인됐다("생선구이" 사진이 "매장 내부" 잡담 문단에 배치됨). 이 구간의 문단은 나머지
-// 첨부 사진 배치 후보에서 아예 제외한다.
+// 첨부 사진 배치 후보에서 제외한다.
+//
+// 처음에는 "다음 소제목(▼로 끝나는 문단)이 나올 때까지"만을 구간으로 잡았는데, 이게
+// 심각한 사고로 이어졌다(실측 확인) — "메뉴판 ▼"이 "매장 내부 ▼"보다 먼저 나오고 그
+// 이후로는 "위치는 요기 ▼"(마무리 지도 마커)까지 다른 소제목이 전혀 없는 구조가
+// 나오면, "다음 소제목"을 마무리 직전 줄로 오인해 본문 전체(수십 개 문단)가 통째로
+// 후보에서 제외돼버렸다(그 결과 사진 12장이 도입부 근처 한 문단에 전부 몰림). 그렇다고
+// 무조건 "다음 N개 후보"로만 자르면, 후보 자체가 적은 짧은 글에서는 그 N개 안에
+// "매장 내부" 구간 다음의 진짜 음식 문단(예: 메뉴판 섹션)까지 포함돼 함께 잘려나가는
+// 반대쪽 사고가 생긴다. 그래서 "위치는 요기"(마무리 전용, 절대 구간 경계로 치지 않음)
+// 를 제외한 진짜 다음 소제목을 우선 경계로 쓰고, 못 찾을 때만 최대 N개로 안전하게
+// 제한한다 — "매장 내부" 잡담은 보통 1~3문단이면 충분하다는 가정이다.
 const STORE_INTERIOR_HEADING_PATTERN = /^매장\s*내부\s*▼?$/
 const ANY_HEADING_PATTERN = /▼\s*$/
+const CLOSING_HEADING_PATTERN = /^위치는\s*(요기|여기)\s*▼?$/
+const MAX_INTERIOR_SECTION_CANDIDATES = 3
 
 function excludeHeadingSection(
   candidates: number[],
@@ -448,15 +467,22 @@ function excludeHeadingSection(
   const headingIndex = paragraphs.findIndex((p) => headingPattern.test(p.trim()))
   if (headingIndex === -1) return candidates
 
-  const nextHeadingIndex = paragraphs.findIndex(
+  const nextRealHeadingIndex = paragraphs.findIndex(
     (p, i) =>
       i > headingIndex &&
       ANY_HEADING_PATTERN.test(p.trim()) &&
-      p.trim().length < MIN_VISUAL_PARAGRAPH_LENGTH
+      p.trim().length < MIN_VISUAL_PARAGRAPH_LENGTH &&
+      !CLOSING_HEADING_PATTERN.test(p.trim())
   )
-  const sectionEnd = nextHeadingIndex === -1 ? paragraphs.length : nextHeadingIndex
 
-  return candidates.filter((index) => index <= headingIndex || index >= sectionEnd)
+  const afterHeading = candidates.filter((index) => index > headingIndex)
+  const withinSection =
+    nextRealHeadingIndex === -1
+      ? afterHeading
+      : afterHeading.filter((index) => index < nextRealHeadingIndex)
+  const excluded = new Set(withinSection.slice(0, MAX_INTERIOR_SECTION_CANDIDATES))
+
+  return candidates.filter((index) => !excluded.has(index))
 }
 
 // 문단별 사진 배치 개수를 추적해, 아직 사진이 없는 후보 문단을 우선 고르는 헬퍼를 만든다.
