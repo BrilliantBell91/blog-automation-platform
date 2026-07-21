@@ -41,13 +41,15 @@ export default async function DraftBlogPreviewPage({ params }: DraftPreviewPageP
         초안 대시보드로
       </Link>
 
-      <div className="flex items-center justify-between gap-4">
+      {/* 모바일(375px 등)에서 제목이 길면 "사진 업로드" 링크와 같은 줄에서 겹쳐 보이던
+          문제가 실측 확인됐다 — 좁은 화면에서는 세로로 쌓고, sm 이상에서만 한 줄로 배치한다. */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <p className="text-sm text-muted-foreground">
           네이버 블로그 화면 미리보기 · {post.title}
         </p>
         <Link
           href={`/admin/uploads/${post.id}`}
-          className="shrink-0 text-sm text-muted-foreground hover:underline"
+          className="shrink-0 self-start text-sm text-muted-foreground hover:underline sm:self-auto"
         >
           사진 업로드
         </Link>

@@ -7,9 +7,13 @@ const Table = React.forwardRef<
   React.HTMLAttributes<HTMLTableElement>
 >(({ className, ...props }, ref) => (
   <div className="relative w-full overflow-auto">
+    {/* min-w 없이 w-full만 있으면 좁은 화면에서 각 열이 내용보다 좁게 눌려, 띄어쓰기가
+        없는 한글 텍스트가 한 글자씩 세로로 쪼개지는 문제가 실측 확인됐다(예: "포스트명"이
+        "포/스/트/명"으로 줄바꿈). min-w를 줘서 테이블 자체는 줄어들지 않고, 대신 위
+        overflow-auto가 가로 스크롤을 담당하게 한다. */}
     <table
       ref={ref}
-      className={cn("w-full caption-bottom text-sm", className)}
+      className={cn("w-full min-w-[640px] caption-bottom text-sm", className)}
       {...props}
     />
   </div>

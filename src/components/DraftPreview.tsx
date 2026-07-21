@@ -67,7 +67,10 @@ export function DraftPreview({ draft }: DraftPreviewProps) {
               key={i}
               className="flex items-center justify-between gap-2 rounded-md p-2 hover:bg-accent"
             >
-              <p className="whitespace-pre-wrap">{paragraph}</p>
+              {/* min-w-0 + break-all: 사진/링크 마커 문단은 긴 URL이 공백 없이 이어져
+                  있어, 이게 없으면 이 행이 가로로 넘쳐 스크롤이 생기는 문제가 실측
+                  확인됐다. */}
+              <p className="min-w-0 whitespace-pre-wrap break-all">{paragraph}</p>
               {/* 시각적 아이콘 크기는 유지하고 버튼 히트 영역만 44px로 확대 */}
               <Button
                 variant="ghost"

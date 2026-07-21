@@ -63,32 +63,44 @@ export function AdminHeader() {
             <Menu className="h-5 w-5" aria-hidden="true" />
           </Button>
         </SheetTrigger>
+        {/* 375px 등 좁은 화면에서 우측 버튼(새로고침/로그아웃)이 줄어들지 않아(shrink-0)
+            제목이 아이콘만 남을 정도로 짜부라지던 문제가 실측 확인됐다. 모바일에서는
+            축약된 제목만 보여주고, sm 이상에서 전체 제목을 표시한다. */}
         <Link href="/" className="truncate text-lg font-bold">
-          <span aria-hidden="true">📝</span> 아기부리새의 블로그 자동화 플랫폼
+          <span aria-hidden="true">📝</span>{" "}
+          <span className="sm:hidden">아기부리새</span>
+          <span className="hidden sm:inline">아기부리새의 블로그 자동화 플랫폼</span>
         </Link>
       </div>
-      <div className="flex shrink-0 items-center gap-3">
-        {/* Task 012: 홈페이지 캐시 재검증 버튼 */}
+      <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+        {/* Task 012: 홈페이지 캐시 재검증 버튼. 모바일에서는 아이콘만 표시해(위와 같은
+            이유로) 제목이 밀려나지 않게 한다. */}
         <Button
           variant="outline"
           size="sm"
-          className="h-11"
+          className="h-11 px-2.5 sm:px-3"
           onClick={handleRevalidateHome}
           disabled={isRevalidating}
           title="홈페이지 캐시 재검증 (최근 Notion 변경 사항 즉시 반영)"
+          aria-label={isRevalidating ? "재검증 중..." : "새로고침"}
         >
-          <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
-          {isRevalidating ? "재검증 중..." : "새로고침"}
+          <RefreshCw className="h-4 w-4 sm:mr-2" aria-hidden="true" />
+          <span className="hidden sm:inline" aria-hidden="true">
+            {isRevalidating ? "재검증 중..." : "새로고침"}
+          </span>
         </Button>
         <Button
           variant="outline"
           size="sm"
-          className="h-11"
+          className="h-11 px-2.5 sm:px-3"
           onClick={handleLogout}
           disabled={isLoggingOut}
+          aria-label={isLoggingOut ? "로그아웃 중..." : "로그아웃"}
         >
-          <LogOut className="mr-2 h-4 w-4" aria-hidden="true" />
-          {isLoggingOut ? "로그아웃 중..." : "로그아웃"}
+          <LogOut className="h-4 w-4 sm:mr-2" aria-hidden="true" />
+          <span className="hidden sm:inline" aria-hidden="true">
+            {isLoggingOut ? "로그아웃 중..." : "로그아웃"}
+          </span>
         </Button>
       </div>
     </header>
