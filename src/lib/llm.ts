@@ -428,6 +428,44 @@ function createLeastUsedPicker(candidates: number[]) {
   }
 }
 
+// createLeastUsedPicker는 "최소 사용, 동률이면 배열 앞자리"라 매칭이 초반~중반에
+// 몰리면 폴백도 계속 앞쪽으로만 쏠린다(실측 확인: "마지막에 글 비중이 너무 높다" —
+// 실제 키워드 매칭이 문단 7~25 구간에 집중되고, 마무리 직전 구간(28~31)은 끝까지
+// 사진을 하나도 못 받았다). 대신 "이미 쓰인 자리에서 가장 먼(=빈 공백이 가장 큰) 자리"를
+// 고르면 매칭이 쏠린 구간을 자연히 피해 아직 비어있는 구간(마무리 직전 포함)으로
+// 흩어진다. pool 배열 안에서의 위치(인덱스) 기준으로 거리를 재고, 양 끝은 경계가
+// 없는 것으로 취급해(반대편에 쓰인 자리가 없으면 무한대 거리) 첫/마지막 위치도
+// 공평하게 후보가 될 수 있게 한다.
+function createSpacedGapPicker(pool: number[]) {
+  const usedPositions: number[] = []
+  return {
+    markUsed(paragraphIndex: number) {
+      const pos = pool.indexOf(paragraphIndex)
+      if (pos !== -1 && !usedPositions.includes(pos)) usedPositions.push(pos)
+    },
+    pick(): number {
+      if (pool.length === 0) return -1
+      if (usedPositions.length === 0) return pool[Math.floor(pool.length / 2)]
+
+      let bestPos = -1
+      let bestDistance = -1
+      for (let i = 0; i < pool.length; i++) {
+        if (usedPositions.includes(i)) continue
+        const before = usedPositions.filter((u) => u < i)
+        const after = usedPositions.filter((u) => u > i)
+        const leftDist = before.length > 0 ? i - Math.max(...before) : Infinity
+        const rightDist = after.length > 0 ? Math.min(...after) - i : Infinity
+        const distance = Math.min(leftDist, rightDist)
+        if (distance > bestDistance) {
+          bestDistance = distance
+          bestPos = i
+        }
+      }
+      return bestPos === -1 ? pool[0] : pool[bestPos]
+    },
+  }
+}
+
 // Notion 제목에 흔히 붙는 "[테스트]", "[협찬]" 같은 대괄호 접두사는 이미지 검색 관련성을
 // 떨어뜨리므로 제거한다.
 function cleanTitleForSearch(title: string): string {
@@ -824,9 +862,21 @@ async function insertImages(
       candidateParagraphs
     )
 
-    const middlePicker = createLeastUsedPicker(
+    const middlePicker = createSpacedGapPicker(
       middleCandidates.length > 0 ? middleCandidates : candidates
     )
+    // matchImagesToParagraphs는 자체 used Set으로 그룹끼리는 겹치지 않게 보장하지만,
+    // middlePicker는 별도의 사용량 카운터를 쓰기 때문에 실제 키워드 매칭으로 이미 배정된
+    // 문단을 모른다. 이 상태로 매칭 실패한 그룹의 폴백을 middlePicker.pick()에 맡기면,
+    // 이미 실제 매칭으로 사진이 붙은 문단을 "안 쓴 문단"으로 오인해 그 위에 또 쌓아버려
+    // 한 문단에 4장 이상 몰리고 정작 다른 중반부 문단(특히 마무리 직전 구간)은 계속
+    // 비어있는 사고가 실측 확인됐다(사용자 신고: "마지막에 글 비중이 너무 높다"). 매칭이
+    // 이미 정한 문단을 먼저 사용 처리해두면, 폴백 픽은 자연히 아직 안 쓰인 다른 문단으로
+    // 흩어진다.
+    groupMatchedIndexes.forEach((paragraphIndex) => {
+      if (paragraphIndex !== null) middlePicker.markUsed(paragraphIndex)
+    })
+
     groups.forEach((group, g) => {
       const paragraphIndex = groupMatchedIndexes[g] ?? middlePicker.pick()
       middlePicker.markUsed(paragraphIndex)

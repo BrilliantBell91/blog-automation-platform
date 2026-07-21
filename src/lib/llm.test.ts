@@ -1367,5 +1367,42 @@ describe("llm", () => {
         expect(result).toContain(`https://s3.example.com/${i + 1}.jpg`)
       })
     })
+
+    it("캡션 매칭이 초반 문단에 몰려도, 매칭 실패한 사진이 이미 매칭된 문단에 겹쳐 쌓이지 않고 아직 빈 문단으로 흩어진다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: 실제 키워드 매칭(초밥/참치처럼 구체적 음식명이 있는 문단)이
+      // 초반~중반에 몰리고, 매칭에 실패한 사진의 폴백이 "최소 사용, 동률이면 앞자리"
+      // 방식이라 이미 매칭으로 사진이 붙은 문단을 "안 쓴 문단"으로 오인해 같은 자리에
+      // 또 쌓아버렸다(한 문단에 4장 이상, 마무리 직전 문단은 끝까지 사진 없음 →
+      // "마지막에 글 비중이 너무 높다" 신고로 이어짐). 매칭 실패한 사진은 이미 매칭된
+      // 문단(초밥/참치)이 아니라 아직 비어있는 다른 문단에 배치돼야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n초밥이 정말 신선하고 맛있었다 다음에도 또 먹고 싶을 정도.\n\n참치도 나왔는데 부드럽고 고소해서 좋았다.\n\n그 외에도 다양한 코스 요리가 알차게 나왔다.\n\n계절 채소도 신선하게 곁들여져 있었다.\n\n마무리 인사.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/sushi.jpg", label: "초밥 클로즈업" },
+          { kind: "image", url: "https://s3.example.com/tuna.jpg", label: "참치 사진" },
+          { kind: "image", url: "https://s3.example.com/random.jpg", label: "전혀 상관없는 잡담" },
+        ],
+      })
+
+      const sushiParagraphIndex = result.indexOf("초밥이 정말 신선하고")
+      const tunaParagraphIndex = result.indexOf("참치도 나왔는데")
+      const thirdParagraphIndex = result.indexOf("그 외에도 다양한")
+      const sushiMarkerIndex = result.indexOf("https://s3.example.com/sushi.jpg")
+      const tunaMarkerIndex = result.indexOf("https://s3.example.com/tuna.jpg")
+      const randomMarkerIndex = result.indexOf("https://s3.example.com/random.jpg")
+
+      // 초밥/참치 사진은 각자의 문단에 정확히 매칭된다
+      expect(sushiMarkerIndex).toBeGreaterThan(sushiParagraphIndex)
+      expect(sushiMarkerIndex).toBeLessThan(tunaParagraphIndex)
+      expect(tunaMarkerIndex).toBeGreaterThan(tunaParagraphIndex)
+      expect(tunaMarkerIndex).toBeLessThan(thirdParagraphIndex)
+      // 매칭 실패한 사진은 초밥/참치 문단(이미 쓰인 자리)이 아니라 그 뒤 비어있는 문단에 위치
+      expect(randomMarkerIndex).toBeGreaterThan(thirdParagraphIndex)
+    })
   })
 })
