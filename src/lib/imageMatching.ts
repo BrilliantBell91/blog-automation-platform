@@ -136,43 +136,48 @@ export function captionsShareKeyword(a: string, b: string): boolean {
   return tokenize(b).some((token) => tokensA.has(token))
 }
 
-// 이미지 각각을 캡션 키워드가 가장 많이 겹치는 문단에 독립적으로 배정한다. 겹치는
-// 키워드가 하나도 없으면(bestScore <= 0) 매칭 실패로 보고 null을 반환해, 호출부가
-// 폴백 위치를 쓰도록 한다. 이미 배정된 문단은(다른 미배정 문단에 조금이라도 겹치는
-// 키워드가 있는 한) 하드하게 재사용하지 않는다 — 예전에는 소프트 페널티(재사용 시
-// 누적 감점)만 있어서, 여러 사진의 캡션이 서로 비슷하게 겹치면 결국 한 문단에 사진이
-// 2~3장씩 몰리는 사고가 실측 확인됐다(원래는 "비슷한 사진끼리 자연히 그룹핑"을
-// 의도한 설계였지만, "짧은 문단 하나에 사진 하나"라는 요구와 상충했다). 후보 문단
-// 수가 사진 수만큼 충분하면(이 프로젝트 실측 케이스: 후보 18개/사진 15장) 하드 제외로
-// 거의 항상 1:1로 퍼진다. 후보가 사진보다 적어 다 채우고 나면 그 이후 이미지는
-// 매칭 실패(null) 처리되어 호출부의 최소사용 폴백으로 넘어간다.
+// 이미지 각각을 캡션 키워드가 가장 많이 겹치는 문단에 배정한다. 겹치는 키워드가
+// 하나도 없으면(score <= 0) 매칭 실패로 보고 null을 반환해, 호출부가 폴백 위치를
+// 쓰도록 한다. 이미 배정된 문단은(다른 미배정 문단에 조금이라도 겹치는 키워드가 있는
+// 한) 하드하게 재사용하지 않는다 — 예전에는 소프트 페널티(재사용 시 누적 감점)만
+// 있어서, 여러 사진의 캡션이 서로 비슷하게 겹치면 결국 한 문단에 사진이 2~3장씩
+// 몰리는 사고가 실측 확인됐다.
+//
+// 이미지를 입력 순서대로 그리디하게 하나씩 처리하면, 약하게라도(예: "샐러드" 한
+// 단어만) 겹치는 사진이 먼저 처리돼 그 문단을 선점해버려서, 훨씬 더 구체적으로 딱
+// 맞는 다른 사진(예: "계란찜"이 정확히 겹침)이 처리될 차례가 됐을 땐 이미 그 문단이
+// 없어져 버리는 사고가 실측 확인됐다. 그래서 모든 (이미지, 문단) 조합의 점수를 먼저
+// 계산해 점수가 높은 조합부터 확정한다 — 순서와 무관하게 가장 확실한 매칭이 항상
+// 먼저 그 자리를 차지한다.
 export function matchImagesToParagraphs(
   images: { caption: string }[],
   candidateParagraphs: { index: number; text: string }[]
 ): (number | null)[] {
-  if (candidateParagraphs.length === 0) return images.map(() => null)
+  const results: (number | null)[] = images.map(() => null)
+  if (candidateParagraphs.length === 0) return results
 
-  const used = new Set<number>()
-
-  return images.map((image) => {
+  const scoredPairs: { imageIndex: number; paragraphIndex: number; score: number }[] = []
+  images.forEach((image, imageIndex) => {
     const tokens = tokenize(image.caption)
-    if (tokens.length === 0) return null
-
-    let best: { index: number; text: string } | null = null
-    let bestScore = -Infinity
-    for (const paragraph of candidateParagraphs) {
-      if (used.has(paragraph.index)) continue
-      const score = keywordOverlapScore(tokens, paragraph.text)
-      if (score > bestScore) {
-        bestScore = score
-        best = paragraph
-      }
-    }
-    if (!best || bestScore <= 0) return null
-
-    used.add(best.index)
-    return best.index
+    if (tokens.length === 0) return
+    candidateParagraphs.forEach(({ index, text }) => {
+      const score = keywordOverlapScore(tokens, text)
+      if (score > 0) scoredPairs.push({ imageIndex, paragraphIndex: index, score })
+    })
   })
+  // 점수 내림차순(동점이면 원래 순서 유지 — Array.sort는 안정 정렬).
+  scoredPairs.sort((a, b) => b.score - a.score)
+
+  const usedParagraphs = new Set<number>()
+  const assignedImages = new Set<number>()
+  for (const { imageIndex, paragraphIndex } of scoredPairs) {
+    if (assignedImages.has(imageIndex) || usedParagraphs.has(paragraphIndex)) continue
+    results[imageIndex] = paragraphIndex
+    usedParagraphs.add(paragraphIndex)
+    assignedImages.add(imageIndex)
+  }
+
+  return results
 }
 
 // 한 그룹에 사진이 무한정 쌓이는 것을 막는 상한. 사용자가 예시로 든 "전체요리/메인요리

@@ -1087,6 +1087,33 @@ describe("llm", () => {
       expect(menuMarkerIndex).toBeGreaterThan(menuBodyIndex) // 소제목 다음 첫 후보 문단(본문) 뒤에 위치
     })
 
+    it("'메뉴판 ▼' 대신 다른 소제목 표현을 써서 메뉴 소제목을 못 찾아도, 메뉴판 사진이 인사말 근처(글 맨 위)에 붙지 않는다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: LLM이 "메뉴판 ▼"이 아니라 "음식 사진 ▼" 같은 다른 표현을
+      // 쓰면 MENU_HEADING_PATTERN이 매치되지 않고, 폴백이 picker.pick()으로 바로
+      // 넘어가 candidates[0](=아직 인사말 흐름 안인 문단)을 집어 메뉴판 사진이 글
+      // 맨 위에 붙어버렸다. 인사말+매장정보가 끝나는 지점(contentStartIndex) 이후의
+      // 후보를 우선해야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n오늘은 이 가게에 다녀온 후기입니다 지금 바로 시작합니닷.\n\n> 주소 : 어딘가\n\n음식 사진 ▼\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/menu.jpg", label: "메뉴판 사진" },
+        ],
+      })
+
+      const greetingIndex = result.indexOf("오늘은 이 가게에")
+      const quoteIndex = result.indexOf("> 주소")
+      const menuMarkerIndex = result.indexOf("https://s3.example.com/menu.jpg")
+
+      // 메뉴판 사진은 인사말/매장정보 블록보다 뒤에 위치해야 한다(글 맨 위에 붙지 않음)
+      expect(menuMarkerIndex).toBeGreaterThan(greetingIndex)
+      expect(menuMarkerIndex).toBeGreaterThan(quoteIndex)
+    })
+
     it("첨부 사진 중 메뉴판이 없으면 findMenuImageViaSearch로 찾아 삽입한다 (회귀 테스트)", async () => {
       process.env.LLM_API_KEY = "test-key"
       searchRealImagesMock.mockImplementation(async (query: string) =>
