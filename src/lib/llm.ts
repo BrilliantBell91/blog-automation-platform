@@ -353,6 +353,17 @@ const MIN_VISUAL_PARAGRAPH_LENGTH = 15
 // 포괄해, 이 문구가 포함된 문단까지는 "인사말의 연장"으로 취급한다.
 const GREETING_HOOK_PATTERN = /시작합니닷|공유드립니닷/
 
+// "매장 내부 ▼" 소제목 구간(분위기/인테리어 잡담)에 음식 사진이 떨어지는 사고를
+// 소제목 위치 기준으로 막으려 했었는데(실측 확인된 여러 사고), 이 접근은 근본적으로
+// 취약했다 — LLM이 이 잡담을 소제목보다 먼저 쓰거나, 소제목 바로 다음에 음식 얘기를
+// 바로 시작하는 등 구조가 매번 달라져서, "소제목 다음 N개 문단을 잡담으로 간주"하는
+// 위치 기반 추정이 실제로는 정반대(진짜 음식 문단은 걸러내고 진짜 잡담 문단은
+// 못 거르는)로 작동하는 사고가 반복됐다. 대신 잡담 문단 자체의 내용(실측 확인된 반복
+// 패턴 — "분위기", "시끌벅적", 음악/노래 언급)으로 직접 감지한다. 이 문단들은 음식과
+// 무관해 캡션이 겹칠 일이 거의 없으므로, 실제 매칭 후보에서도 안전하게 완전히 제외할
+// 수 있다(소제목 기반 방식과 달리 위치 오판으로 진짜 음식 매칭을 잘못 막을 위험이 없다).
+const ATMOSPHERE_COMMENT_PATTERN = /분위기|시끌벅적|가요[가는를]|노래가|음악이/
+
 // 이미지 슬롯으로 쓸 수 있는 문단을 필터링한다. 인사말(첫 문단, 쪼개져 있으면 훅 문구가
 // 나오는 문단까지)/마무리·해시태그(마지막 문단), 인용구·해시태그 줄, 이미 사진/링크
 // 마커인 문단, 장면 설명으로 쓰기엔 너무 짧은 문단은 제외한다.
@@ -376,6 +387,9 @@ function getVisualParagraphCandidates(paragraphs: string[]): number[] {
     // 인사말이 두 문단으로 쪼개진 경우, 훅 문구가 있는(=여전히 인사말인) 문단은
     // 후보에서 제외한다(위 GREETING_HOOK_PATTERN 설명 참고).
     if (GREETING_HOOK_PATTERN.test(p)) return
+    // 분위기/인테리어 잡담 문단은 소제목 위치와 무관하게 내용으로 직접 제외한다
+    // (위 ATMOSPHERE_COMMENT_PATTERN 설명 참고).
+    if (ATMOSPHERE_COMMENT_PATTERN.test(p)) return
     candidates.push(i)
   })
   return candidates
@@ -401,11 +415,16 @@ function findCandidateAfterHeading(
   const candidate = candidates.find((c) => c > headingIndex)
   if (candidate === undefined) return undefined
 
+  // "위치는 요기 ▼"(마무리 지도 마커)는 다른 소제목들과 달리 본문 섹션 경계로 치지
+  // 않는다 — 그대로 두면 "메뉴판 ▼" 뒤에 다른 소제목이 전혀 없는 흔한 구조에서 이
+  // 마무리 줄을 "다음 소제목"으로 오인해, 정상적인 후보(candidate)까지 "다른 섹션
+  // 소속"으로 잘못 판단해 통째로 undefined를 반환해버리는 사고로 이어진다.
   const nextHeadingIndex = paragraphs.findIndex(
     (p, i) =>
       i > headingIndex &&
       ANY_HEADING_PATTERN.test(p.trim()) &&
-      p.trim().length < MIN_VISUAL_PARAGRAPH_LENGTH
+      p.trim().length < MIN_VISUAL_PARAGRAPH_LENGTH &&
+      !CLOSING_HEADING_PATTERN.test(p.trim())
   )
   if (nextHeadingIndex !== -1 && candidate >= nextHeadingIndex) return undefined
 
@@ -460,55 +479,16 @@ function trimHeadAndTail(candidates: number[]): number[] {
   return trimmed.length >= MIN_MIDDLE_CANDIDATES ? trimmed : candidates
 }
 
-// "매장 내부 ▼" 소제목 구간은 분위기/인테리어 잡담이라 특정 음식과 무관한데, 그 사진이
-// 캡션 매칭에도 실패하고 형제 그룹도 없으면(예: 본문에 아예 언급되지 않은 코스) 위치
-// 기반 폴백이 아무 빈 자리나 골라 이 구간에 음식 사진이 떨어지는 사고가 실측
-// 확인됐다("생선구이" 사진이 "매장 내부" 잡담 문단에 배치됨). 이 구간의 문단은 나머지
-// 첨부 사진 배치 후보에서 제외한다.
+// "매장 내부 ▼" 등 소제목의 상대적 위치로 "잡담 구간"을 추정하던 방식(excludeHeadingSection)은
+// 제거했다 — LLM이 잡담을 소제목보다 먼저 쓰거나 소제목 바로 다음에 음식 얘기를 바로
+// 시작하는 등 구조가 매번 달라져서, 위치 추정이 실제로는 정반대로 작동(진짜 음식 문단은
+// 걸러내고 진짜 잡담 문단은 못 거름)하는 사고가 반복됐다(실측 확인). 대신
+// ATMOSPHERE_COMMENT_PATTERN으로 잡담 문단 자체를 내용 기반으로 감지한다(위 참고).
 //
-// 처음에는 "다음 소제목(▼로 끝나는 문단)이 나올 때까지"만을 구간으로 잡았는데, 이게
-// 심각한 사고로 이어졌다(실측 확인) — "메뉴판 ▼"이 "매장 내부 ▼"보다 먼저 나오고 그
-// 이후로는 "위치는 요기 ▼"(마무리 지도 마커)까지 다른 소제목이 전혀 없는 구조가
-// 나오면, "다음 소제목"을 마무리 직전 줄로 오인해 본문 전체(수십 개 문단)가 통째로
-// 후보에서 제외돼버렸다(그 결과 사진 12장이 도입부 근처 한 문단에 전부 몰림). 그렇다고
-// 무조건 "다음 N개 후보"로만 자르면, 후보 자체가 적은 짧은 글에서는 그 N개 안에
-// "매장 내부" 구간 다음의 진짜 음식 문단(예: 메뉴판 섹션)까지 포함돼 함께 잘려나가는
-// 반대쪽 사고가 생긴다. 그래서 "위치는 요기"(마무리 전용, 절대 구간 경계로 치지 않음)
-// 를 제외한 진짜 다음 소제목을 우선 경계로 쓰고, 못 찾을 때만 최대 N개로 안전하게
-// 제한한다. N을 3에서 2로 낮췄다 — 실측 확인된 "매장 내부" 잡담은 보통 1~2문단이었고,
-// 3으로 두면 후보가 적은 글에서 진짜 첫 음식 문단(예: 계란찜)까지 함께 제외돼버리는
-// 사고가 있었다(캡션이 실제로 겹치는 매칭 자체는 별도로 보호되므로 — 아래 참고 —
-// 이 상수는 순수 위치 기반 폴백에서만 쓰이는 안전장치임을 기억할 것).
-const STORE_INTERIOR_HEADING_PATTERN = /^매장\s*내부\s*▼?$/
+// 아래 두 패턴은 findCandidateAfterHeading이 "이 소제목과 다음 후보 사이에 다른 소제목이
+// 끼어 있는지" 판단할 때만 쓴다 — "위치는 요기 ▼"(마무리 전용)는 절대 그 경계로 치지 않는다.
 const ANY_HEADING_PATTERN = /▼\s*$/
 const CLOSING_HEADING_PATTERN = /^위치는\s*(요기|여기)\s*▼?$/
-const MAX_INTERIOR_SECTION_CANDIDATES = 2
-
-function excludeHeadingSection(
-  candidates: number[],
-  paragraphs: string[],
-  headingPattern: RegExp
-): number[] {
-  const headingIndex = paragraphs.findIndex((p) => headingPattern.test(p.trim()))
-  if (headingIndex === -1) return candidates
-
-  const nextRealHeadingIndex = paragraphs.findIndex(
-    (p, i) =>
-      i > headingIndex &&
-      ANY_HEADING_PATTERN.test(p.trim()) &&
-      p.trim().length < MIN_VISUAL_PARAGRAPH_LENGTH &&
-      !CLOSING_HEADING_PATTERN.test(p.trim())
-  )
-
-  const afterHeading = candidates.filter((index) => index > headingIndex)
-  const withinSection =
-    nextRealHeadingIndex === -1
-      ? afterHeading
-      : afterHeading.filter((index) => index < nextRealHeadingIndex)
-  const excluded = new Set(withinSection.slice(0, MAX_INTERIOR_SECTION_CANDIDATES))
-
-  return candidates.filter((index) => !excluded.has(index))
-}
 
 // 문단별 사진 배치 개수를 추적해, 아직 사진이 없는 후보 문단을 우선 고르는 헬퍼를 만든다.
 // "사진 개수만큼 문단을 나눠 쓰라"는 프롬프트 지시로 후보 문단 수가 사진 개수보다 많아지는
@@ -891,18 +871,6 @@ async function insertImages(
   const candidates = getVisualParagraphCandidates(paragraphs)
   if (candidates.length === 0) return { text: paragraphs.join("\n\n"), leadImageUrl }
 
-  // "매장 내부 ▼" 소제목 구간(분위기 잡담)은 사진 폴백(캡션 매칭 실패 시 위치로만
-  // 정하는 경로)이 절대 고르지 않아야 하는 구간이다. 다만 이 구간의 텍스트 자체가
-  // 실제로 어떤 사진 캡션과 진짜로 겹친다면(예: 계란찜 문장이 우연히 이 구간 바로
-  // 다음에 있는 경우) 그 진짜 매칭까지 막으면 안 된다 — 처음엔 실제 매칭 후보에서도
-  // 이 구간을 통째로 빼버려서, 정확히 매칭돼야 할 사진(계란찜 등)이 오히려 후보에서
-  // 사라지는 사고로 이어졌다(실측 확인). 그래서 이 풀은 "폴백 전용"으로만 쓴다.
-  const nonInteriorCandidates = excludeHeadingSection(
-    candidates,
-    paragraphs,
-    STORE_INTERIOR_HEADING_PATTERN
-  )
-
   // 이미지 목표 개수를 "카테고리 최소값" 또는 "글 길이 기반값" 중 더 큰 값으로 결정
   const minImageCount = entry?.aiImageCount ?? DEFAULT_AI_IMAGE_COUNT
   const imagesPerParagraphs = entry?.imagesPerParagraphs ?? 5
@@ -953,7 +921,7 @@ async function insertImages(
     // 뒤에 있는 후보를 우선 찾고, 그마저 없을 때만 picker.pick()으로 폴백한다.
     menuParagraphIndex =
       findCandidateAfterHeading(paragraphs, candidates, MENU_HEADING_PATTERN) ??
-      nonInteriorCandidates.find((c) => c >= contentStartIndex) ??
+      candidates.find((c) => c >= contentStartIndex) ??
       picker.pick()
     appendImageMarker(menuParagraphIndex, menuImageUrl)
     picker.markUsed(menuParagraphIndex)
@@ -985,14 +953,6 @@ async function insertImages(
     )
     const basePool = candidates.filter((index) => !reservedParagraphs.has(index))
     const middleCandidates = trimHeadAndTail(basePool)
-    // 실제 캡션 매칭 후보(candidateParagraphs)에는 "매장 내부" 구간을 미리 빼지 않는다
-    // — 계란찜 같은 사진이 정말로 이 구간 바로 다음 문단과 겹친다면 그 매칭은 살아있어야
-    // 한다. 위치 기반 폴백(middlePicker) 전용 풀에서만 이 구간을 제외한다.
-    const middleFallbackPool = excludeHeadingSection(
-      middleCandidates,
-      paragraphs,
-      STORE_INTERIOR_HEADING_PATTERN
-    )
     const candidateParagraphs = middleCandidates.map((index) => ({ index, text: paragraphs[index] }))
 
     const groupCaptions = groupSimilarImages(matchableEntries.map(({ analysis }) => analysis.caption)).map(
@@ -1007,7 +967,7 @@ async function insertImages(
     )
 
     const middlePicker = createSpacedGapPicker(
-      middleFallbackPool.length > 0 ? middleFallbackPool : middleCandidates
+      middleCandidates.length > 0 ? middleCandidates : candidates
     )
     // matchImagesToParagraphs는 자체 used Set으로 그룹끼리는 겹치지 않게 보장하지만,
     // middlePicker는 별도의 사용량 카운터를 쓰기 때문에 실제 키워드 매칭으로 이미 배정된

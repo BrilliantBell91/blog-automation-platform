@@ -1480,6 +1480,35 @@ describe("llm", () => {
       expect(result).toContain("https://s3.example.com/menu.jpg")
     })
 
+    it("분위기 잡담이 소제목보다 먼저 나오고 소제목 바로 다음에 실제 음식 문단이 이어지는 구조에서도, 메뉴판 사진이 잡담 문단이 아니라 음식 문단 쪽에 배치된다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: "매장 내부 ▼" 소제목 위치를 기준으로 "그 다음 N개 문단을
+      // 잡담으로 간주"하던 이전 로직은, LLM이 잡담을 소제목보다 먼저 쓰고 소제목
+      // 바로 다음엔 곧장 음식 얘기를 시작하는 구조에서는 정반대로 작동했다 — 진짜
+      // 잡담 문단(소제목 이전)은 걸러내지 못하고, 소제목 다음의 진짜 음식 문단(계란찜)
+      // 을 오히려 "잡담"으로 오인해 제외해버렸다. 이제는 위치가 아니라 "분위기"/
+      // "시끌벅적" 같은 내용 자체로 잡담을 감지하므로, 소제목 순서와 무관하게 항상
+      // 정확해야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n간만에 남편이랑 놀러 갔는데 생각했던 것과 달리 분위기가 시끌벅적해서 놀랐다.\n\n여기는 조용히 대화하기보다는 친구랑 오기 좋은 분위기인 듯하다.\n\n메뉴판 ▼\n\n매장 내부 ▼\n\n처음 시작은 상큼한 샐러드랑 보들보들한 계란찜이 나온다.\n\n마무리 인사.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/menu.jpg", label: "메뉴판 사진" },
+        ],
+      })
+
+      const atmosphereIndex = result.indexOf("간만에 남편이랑")
+      const jeranIndex = result.indexOf("처음 시작은 상큼한")
+      const atmosphereSection = result.slice(atmosphereIndex, jeranIndex)
+
+      // 잡담 문단(소제목 이전) 구간에는 메뉴판 사진이 붙지 않는다
+      expect(atmosphereSection).not.toContain("[사진 원본")
+      expect(result).toContain("https://s3.example.com/menu.jpg")
+    })
+
     it("'매장 내부' 소제목 구간 바로 다음 문단이라도, 캡션이 실제로 겹치면(계란찜 등) 정상적으로 매칭된다 (회귀 테스트)", async () => {
       // 실측 확인된 사고: "매장 내부" 구간을 나머지 첨부 사진의 실제 매칭 후보에서도
       // 통째로 미리 빼버려서, 계란찜 사진처럼 정확히 그 구간 바로 다음 문단과 캡션이
