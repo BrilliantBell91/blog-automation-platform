@@ -6,7 +6,12 @@ import {
   type IllustrativeImageStyle,
 } from "./imageGen"
 import { searchRealImages, searchGoogleImages } from "./imageSearch"
-import { analyzeImagesBatch, matchImagesToParagraphs, groupSimilarImages } from "./imageMatching"
+import {
+  analyzeImagesBatch,
+  matchImagesToParagraphs,
+  groupSimilarImages,
+  captionsShareKeyword,
+} from "./imageMatching"
 import { searchNaverPlace } from "./naverLocalSearch"
 import { extractNaverPlaceId, fetchNaverPlaceDetail, fetchNaverPlacePhotos } from "./naverPlaceDetail"
 import { inferFacilityFromReviews } from "./naverReviewSearch"
@@ -338,8 +343,19 @@ const MARKER_PARAGRAPH = /^\[(사진 원본|참고링크)/
 // allowAiFallback=false라 애초에 AI 생성을 쓰지 않는다(검색/장소사진만 사용).
 const MIN_VISUAL_PARAGRAPH_LENGTH = 15
 
-// 이미지 슬롯으로 쓸 수 있는 문단을 필터링한다. 인사말(첫 문단)/마무리·해시태그(마지막 문단),
-// 인용구·해시태그 줄, 이미 사진/링크 마커인 문단, 장면 설명으로 쓰기엔 너무 짧은 문단은 제외한다.
+// 인사말은 보통 "안녕하세요..."와 "...지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧" 같은 훅
+// 문구가 한 문단에 같이 나오지만, LLM이 이 둘을 서로 다른 두 문단으로 쪼개 쓰는 경우가
+// 실측으로 확인됐다(예: [0]="안녕하세요, 아기부리새예요.🙌" 단독, [1]="가성비 넘치는
+// 구성으로... 지금 바로 시작합니닷..."). 이때 문단[0]만 "인사말"로 보고 문단[1]을 이미
+// 후보/삽입 지점으로 취급하면, 대표 사진이 인사말 문장 한가운데 끼어들거나(리드 삽입
+// 위치 오류) 인사말 나머지 절반이 사진 후보 문단으로 오인돼(candidates[0]) 메뉴판 사진이
+// 매장 정보 블록 위쪽에 잘못 붙는 사고로 이어졌다. 카테고리별 훅 종결 문구를 모두
+// 포괄해, 이 문구가 포함된 문단까지는 "인사말의 연장"으로 취급한다.
+const GREETING_HOOK_PATTERN = /시작합니닷|공유드립니닷/
+
+// 이미지 슬롯으로 쓸 수 있는 문단을 필터링한다. 인사말(첫 문단, 쪼개져 있으면 훅 문구가
+// 나오는 문단까지)/마무리·해시태그(마지막 문단), 인용구·해시태그 줄, 이미 사진/링크
+// 마커인 문단, 장면 설명으로 쓰기엔 너무 짧은 문단은 제외한다.
 function getVisualParagraphCandidates(paragraphs: string[]): number[] {
   const candidates: number[] = []
   paragraphs.forEach((raw, i) => {
@@ -352,6 +368,9 @@ function getVisualParagraphCandidates(paragraphs: string[]): number[] {
     // 뒤섞여 더 혼란스러워지는 사고가 실측 확인됐다.
     if (p.includes("[사진 원본") || p.includes("[참고링크")) return
     if (p.length < MIN_VISUAL_PARAGRAPH_LENGTH) return
+    // 인사말이 두 문단으로 쪼개진 경우, 훅 문구가 있는(=여전히 인사말인) 문단은
+    // 후보에서 제외한다(위 GREETING_HOOK_PATTERN 설명 참고).
+    if (GREETING_HOOK_PATTERN.test(p)) return
     candidates.push(i)
   })
   return candidates
@@ -382,6 +401,18 @@ const MENU_HEADING_PATTERN = /^메뉴(판)?\s*▼?$/
 // 독립된 문단으로 강제 삽입한다.
 function findLeadInsertionIndex(paragraphs: string[]): number {
   let idx = 1
+  // 인사말이 문단[0]에서 끝나지 않고 훅 문구가 바로 다음 문단에 쪼개져 나오는 경우(위
+  // GREETING_HOOK_PATTERN 설명 참고), 그 문단도 인사말의 연장으로 보고 건너뛴다.
+  // 문단[1]에도 훅 문구가 없으면(짧은 인사말이라 애초에 쪼개지지 않은 통상적인 경우)
+  // 문서 전체를 훑지 않고 기존처럼 문단[0]만 인사말로 본다 — 훅 문구 자체가 없는
+  // 글에서까지 찾으려 들면 대표 사진이 문서 맨 끝으로 밀려버리는 사고로 이어진다.
+  if (
+    !GREETING_HOOK_PATTERN.test(paragraphs[0] ?? "") &&
+    paragraphs[1] !== undefined &&
+    GREETING_HOOK_PATTERN.test(paragraphs[1])
+  ) {
+    idx = 2
+  }
   while (idx < paragraphs.length && paragraphs[idx].trim().startsWith(">")) idx++
   return idx
 }
@@ -854,11 +885,14 @@ async function insertImages(
     const middleCandidates = trimHeadAndTail(basePool)
     const candidateParagraphs = middleCandidates.map((index) => ({ index, text: paragraphs[index] }))
 
-    const groups = groupSimilarImages(matchableEntries.map(({ analysis }) => analysis.caption))
-    const groupMatchedIndexes = matchImagesToParagraphs(
-      groups.map((group) => ({
+    const groupCaptions = groupSimilarImages(matchableEntries.map(({ analysis }) => analysis.caption)).map(
+      (group) => ({
+        members: group,
         caption: group.map((memberIndex) => matchableEntries[memberIndex].analysis.caption).join(", "),
-      })),
+      })
+    )
+    const groupMatchedIndexes = matchImagesToParagraphs(
+      groupCaptions.map(({ caption }) => ({ caption })),
       candidateParagraphs
     )
 
@@ -873,15 +907,36 @@ async function insertImages(
     // 비어있는 사고가 실측 확인됐다(사용자 신고: "마지막에 글 비중이 너무 높다"). 매칭이
     // 이미 정한 문단을 먼저 사용 처리해두면, 폴백 픽은 자연히 아직 안 쓰인 다른 문단으로
     // 흩어진다.
-    groupMatchedIndexes.forEach((paragraphIndex) => {
-      if (paragraphIndex !== null) middlePicker.markUsed(paragraphIndex)
+    const decidedParagraphOf: (number | undefined)[] = groupMatchedIndexes.map((v) => v ?? undefined)
+    decidedParagraphOf.forEach((paragraphIndex) => {
+      if (paragraphIndex !== undefined) middlePicker.markUsed(paragraphIndex)
     })
 
-    groups.forEach((group, g) => {
-      const paragraphIndex = groupMatchedIndexes[g] ?? middlePicker.pick()
+    groupCaptions.forEach((group, g) => {
+      if (decidedParagraphOf[g] !== undefined) return
+
+      // 그룹 상한(MAX_SIMILAR_GROUP_SIZE) 때문에 같은 종류의 사진인데도 별도 그룹으로
+      // 남아 문단 매칭에도 실패한 경우, 완전히 무관한 위치로 흩어지기 전에 이미 자리
+      // 잡은 다른 그룹 중 캡션 키워드가 겹치는(=같은 종류의 사진) "형제" 그룹이 있으면
+      // 그 문단에 합류시킨다. 실측 확인된 사고: 초밥 사진이 4장인데 3장만 그룹으로
+      // 묶이고 남은 1장이 "매장 내부" 소개 문단처럼 전혀 무관한 위치에 떨어졌다.
+      const siblingIndex = decidedParagraphOf.findIndex(
+        (target, otherG) =>
+          target !== undefined &&
+          otherG !== g &&
+          captionsShareKeyword(group.caption, groupCaptions[otherG].caption)
+      )
+      const paragraphIndex =
+        siblingIndex !== -1 ? decidedParagraphOf[siblingIndex]! : middlePicker.pick()
+      decidedParagraphOf[g] = paragraphIndex
+      middlePicker.markUsed(paragraphIndex)
+    })
+
+    groupCaptions.forEach((group, g) => {
+      const paragraphIndex = decidedParagraphOf[g]!
       middlePicker.markUsed(paragraphIndex)
       picker.markUsed(paragraphIndex)
-      group.forEach((memberIndex) => {
+      group.members.forEach((memberIndex) => {
         appendImageMarker(paragraphIndex, matchableEntries[memberIndex].attachment.url)
       })
     })

@@ -125,6 +125,17 @@ function keywordOverlapScore(captionTokens: string[], paragraphText: string): nu
   return hits / captionTokens.length
 }
 
+// 두 캡션이 키워드를 하나라도 공유하는지 확인한다(groupSimilarImages와 동일한 기준).
+// 그룹 상한(MAX_SIMILAR_GROUP_SIZE)에 걸려 같은 종류의 사진인데도 별도 그룹으로 남은
+// 경우, 이미 배치된 "형제" 그룹을 찾아 합류시키는 용도로 쓴다 — 실측 확인된 사고:
+// 초밥 사진이 4장인데 그룹 상한(3장) 때문에 하나가 남아 문단 매칭에도 실패하면,
+// 위치 기반 폴백이 전혀 무관한 문단(예: "매장 내부" 소개 문단)에 떨어뜨렸다.
+export function captionsShareKeyword(a: string, b: string): boolean {
+  const tokensA = new Set(tokenize(a))
+  if (tokensA.size === 0) return false
+  return tokenize(b).some((token) => tokensA.has(token))
+}
+
 // 이미지 각각을 캡션 키워드가 가장 많이 겹치는 문단에 독립적으로 배정한다. 겹치는
 // 키워드가 하나도 없으면(bestScore <= 0) 매칭 실패로 보고 null을 반환해, 호출부가
 // 폴백 위치를 쓰도록 한다. 이미 배정된 문단은(다른 미배정 문단에 조금이라도 겹치는

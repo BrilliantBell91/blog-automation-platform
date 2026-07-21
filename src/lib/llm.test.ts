@@ -1026,6 +1026,43 @@ describe("llm", () => {
       expect(markerIndex).toBeLessThan(secondParagraphIndex)
     })
 
+    it("인사말이 두 문단으로 쪼개져 나와도(훅 문구가 별도 문단) 대표 사진이 인사말 중간에 끼어들지 않는다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: LLM이 "안녕하세요, 아기부리새예요.🙌"와 "가성비 넘치는 구성으로...
+      // 지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧" 훅 문구를 하나가 아니라 두 개의 별도 문단으로
+      // 나눠 썼다. 이때 대표 사진이 이 둘 사이(인사말 문장 한가운데)에 끼어들거나, 훅
+      // 문구가 있는 문단이 사진 후보로 오인돼 메뉴판 사진이 매장 정보 블록 위쪽에 잘못
+      // 붙는 사고로 이어졌다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요, 아기부리새예요.🙌\n\n가성비 넘치는 구성으로 배부르게 먹고 온 신중동 오마카세, 미우치 지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧\n\n> 주소 : 경기 부천시 원미구\n> 전화 : 0507-1344-8246\n\n메뉴판 ▼\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사.",
+      })
+
+      const { content: result, leadImageUrl } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/exterior.jpg", label: "가게 외관" },
+          { kind: "image", url: "https://s3.example.com/menu.jpg", label: "메뉴판 사진" },
+        ],
+      })
+
+      const greetingIndex = result.indexOf("안녕하세요, 아기부리새예요")
+      const hookIndex = result.indexOf("가성비 넘치는 구성으로")
+      const quoteIndex = result.indexOf("> 주소")
+      const menuHeadingIndex = result.indexOf("메뉴판 ▼")
+      const exteriorMarkerIndex = result.indexOf("https://s3.example.com/exterior.jpg")
+      const menuMarkerIndex = result.indexOf("https://s3.example.com/menu.jpg")
+
+      expect(leadImageUrl).toBe("https://s3.example.com/exterior.jpg")
+      // 대표 사진은 인사말 두 문단(훅 문구 포함)과 매장정보 인용구 뒤, 소제목보다 앞에 위치
+      expect(exteriorMarkerIndex).toBeGreaterThan(hookIndex)
+      expect(exteriorMarkerIndex).toBeGreaterThan(quoteIndex)
+      expect(exteriorMarkerIndex).toBeLessThan(menuHeadingIndex)
+      // 인사말 두 문단 사이(그리팅~훅) 어디에도 사진이 끼어들지 않는다
+      expect(result.slice(greetingIndex, hookIndex)).not.toContain("[사진 원본")
+      // 메뉴판 사진은 매장정보 인용구보다 앞이 아니라 "메뉴판 ▼" 소제목 뒤에 위치
+      expect(menuMarkerIndex).toBeGreaterThan(menuHeadingIndex)
+    })
+
     it("첨부 사진 중 메뉴판으로 판별된 사진은 '메뉴 ▼' 소제목 바로 다음 문단에 강제 배치된다 (회귀 테스트)", async () => {
       // 사용자 요청: 외관 사진뿐 아니라 메뉴판 사진도 반드시 포함시켜야 한다. 첨부에
       // 메뉴판 사진이 있으면 그걸 쓰고, 소제목("메뉴 ▼") 바로 다음 문단에 배치해야
@@ -1298,6 +1335,38 @@ describe("llm", () => {
       expect(sushiBIndex).toBeLessThan(dessertParagraphIndex)
       // 디저트 사진은 초밥 사진들과 묶이지 않고 디저트 문단 뒤에 별도로 위치한다
       expect(dessertMarkerIndex).toBeGreaterThan(dessertParagraphIndex)
+    })
+
+    it("그룹 상한을 넘는 같은 종류의 사진(4번째 초밥 사진)은 무관한 문단이 아니라 나머지 초밥 사진들과 같은 문단에 합류한다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: 초밥 사진이 4장인데 그룹 상한(MAX_SIMILAR_GROUP_SIZE=3) 때문에
+      // 3장만 묶이고 남은 1장이 문단 매칭에도 실패해, "매장 내부" 소개 문단처럼 전혀
+      // 무관한 위치에 떨어졌다. 매칭 실패한 사진이라도 캡션이 겹치는(=같은 종류) 이미
+      // 배치된 그룹이 있으면 그 문단에 합류해야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock.mockResolvedValueOnce({
+        text: "안녕하세요.\n\n매장 내부는 아늑하고 조용한 느낌이었다 전체적으로 깔끔했음.\n\n오늘은 초밥을 먹었는데 정말 신선하고 맛있었습니다.\n\n마무리 인사.",
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/sushi1.jpg", label: "초밥 클로즈업" },
+          { kind: "image", url: "https://s3.example.com/sushi2.jpg", label: "초밥 접시" },
+          { kind: "image", url: "https://s3.example.com/sushi3.jpg", label: "초밥 사진 모음" },
+          { kind: "image", url: "https://s3.example.com/sushi4.jpg", label: "초밥 마지막 컷" },
+        ],
+      })
+
+      const interiorParagraphIndex = result.indexOf("매장 내부는 아늑하고")
+      const sushiParagraphIndex = result.indexOf("오늘은 초밥을 먹었는데")
+      const interiorSection = result.slice(interiorParagraphIndex, sushiParagraphIndex)
+
+      // "매장 내부" 문단 구간에는 초밥 사진이 하나도 끼어들지 않는다
+      expect(interiorSection).not.toContain("[사진 원본")
+      // 네 장 모두 초밥 문단 뒤(=같은 자리)에 위치한다
+      ;["sushi1", "sushi2", "sushi3", "sushi4"].forEach((name) => {
+        expect(result.indexOf(`https://s3.example.com/${name}.jpg`)).toBeGreaterThan(sushiParagraphIndex)
+      })
     })
 
     it("첨부 사진이 많아도 도입부(첫 문단)와 마무리(끝 문단)에는 억지로 사진을 채우지 않는다 (회귀 테스트)", async () => {
