@@ -1501,12 +1501,15 @@ describe("llm", () => {
       })
 
       const atmosphereIndex = result.indexOf("간만에 남편이랑")
-      const jeranIndex = result.indexOf("처음 시작은 상큼한")
-      const atmosphereSection = result.slice(atmosphereIndex, jeranIndex)
+      const menuHeadingIndex = result.indexOf("메뉴판 ▼")
+      const atmosphereSection = result.slice(atmosphereIndex, menuHeadingIndex)
 
-      // 잡담 문단(소제목 이전) 구간에는 메뉴판 사진이 붙지 않는다
+      // 잡담 문단(소제목 이전) 구간에는 메뉴판 사진이 붙지 않는다 — "메뉴판 ▼" 바로
+      // 다음에 다른 소제목("매장 내부 ▼")이 곧장 이어져 다음 후보 검색이 막히면,
+      // 메뉴판 사진은 소제목 자신에 직접 붙는다(전혀 무관한 먼 문단으로 새지 않음).
       expect(atmosphereSection).not.toContain("[사진 원본")
-      expect(result).toContain("https://s3.example.com/menu.jpg")
+      const menuMarkerIndex = result.indexOf("https://s3.example.com/menu.jpg")
+      expect(menuMarkerIndex).toBeGreaterThan(menuHeadingIndex)
     })
 
     it("'매장 내부' 소제목 구간 바로 다음 문단이라도, 캡션이 실제로 겹치면(계란찜 등) 정상적으로 매칭된다 (회귀 테스트)", async () => {

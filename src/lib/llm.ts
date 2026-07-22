@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai"
-import { Post, LlmAttachment } from "@/types"
+import { Post, LlmAttachment, NotionBlock } from "@/types"
 import {
   generateAiImage,
   verifyImageRelevance,
@@ -15,7 +15,11 @@ import {
 import { searchNaverPlace } from "./naverLocalSearch"
 import { extractNaverPlaceId, fetchNaverPlaceDetail, fetchNaverPlacePhotos } from "./naverPlaceDetail"
 import { inferFacilityFromReviews } from "./naverReviewSearch"
-import { findExteriorImageViaSearch, findMenuImageViaSearch } from "./thumbnail"
+import {
+  findExteriorImageViaSearch,
+  findMenuImageViaSearch,
+  findInteriorImageViaSearch,
+} from "./thumbnail"
 import { extractLinkLabel } from "./naverDraftParser"
 import { withRetry, shouldTryNextModel } from "./geminiRetry"
 import { generateGroqText } from "./groqClient"
@@ -60,7 +64,7 @@ const CATEGORY_STYLE_NOTES: Record<
   (1) 정보/절차 안내형(혼인신고, 예산 등 how-to): 개인 서사가 거의 없는 순수 정보 글.
   (2) 업체 후기+실용정보 혼합형(웨딩홀 투어, 스드메 업체 후기 등): 스펙 정보 + 선택 이유를 개인 후기 톤으로.
   (3) 스토리텔링/일기형(프로포즈, 연애 에피소드 등): 절차 정보 없이 대화체 서사 위주.
-- 서두는 "안녕하세요, 아기부리새예요.🙌"로 시작해 주제 한 문장 뒤 "...기록 시작하겠습니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧"로 이어지는 고정 인사말을 그대로(또는 거의 그대로) 재현하세요. **이 인사말 전체는 줄바꿈 없이 하나의 문단으로 이어 쓰세요.**
+- 서두는 "안녕하세요, 아기부리새예요.🙌"로 시작해 주제 한 문장 뒤 "...기록 시작하겠습니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧"로 이어지는 고정 인사말을 그대로(또는 거의 그대로) 재현하세요. **"안녕하세요, 아기부리새예요.🙌"는 그 줄에서 끝내고, 빈 줄로 문단을 나눈 뒤 이어지는 나머지(주제 한 문장 + "...기록 시작하겠습니닷...")를 별도 문단으로 쓰세요.**
 - 정보/절차형(1)은: 소제목을 그 줄 맨 앞에 "> "만 붙여 표시하고(\`<blockquote>\` 같은 HTML 태그는 쓰지 마세요), 소제목 다음 줄은 반드시 빈 줄로 분리한 뒤 단계를 번호 목록(1. 2. 3.)으로 정리하세요. 놓치면 안 되는 정보는 **볼드**로 강조하세요.
 - 업체 후기형(2)은: 스펙 정보를 대시(-) 목록으로 나열한 뒤("-위치 : ... / -주차 : ... / -전화번호 : ..." 형식), 이어서 "선택 이유"를 별도로 번호 목록화하세요(예: "1. 위치 : ... 2. 식사 : ... 3. 주차 : ...").
 - 마무리는 "[날짜] 아기부리새와/가 쀼찬~ [주제] 기록 총총" 형식의 짧은 종결구로 끝내세요(정보형 단독 글은 "총총" 대신 "👋다들 행복한 [상황]하시길 바라요.👋" 같은 직접 인사도 가능).
@@ -73,7 +77,7 @@ const CATEGORY_STYLE_NOTES: Record<
     imagesPerParagraphs: 3,
     allowAiFallback: true,
     notes: `- 실제 이 카테고리 글은 전부(2편 전수 확인) 육아휴직/출산휴가 신청 같은 절차·서류 안내형입니다. 성장기록·이유식·용품 후기 톤이 아니라 아래처럼 "정보 메모" 톤으로 쓰세요.
-- 서두는 "안녕하세요, 아기부리새예요.🙌"로 시작해서 "[주제] 지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧"로 이어지는 고정 인사말을 그대로(또는 거의 그대로) 재현하세요. 다른 카테고리처럼 "기록"이 아니라 "[신청방법 등 주제] 지금 바로 시작합니닷"으로 자연스럽게 변형하세요. **이 인사말 전체는 줄바꿈 없이 하나의 문단으로 이어 쓰세요.**
+- 서두는 "안녕하세요, 아기부리새예요.🙌"로 시작해서 "[주제] 지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧"로 이어지는 고정 인사말을 그대로(또는 거의 그대로) 재현하세요. 다른 카테고리처럼 "기록"이 아니라 "[신청방법 등 주제] 지금 바로 시작합니닷"으로 자연스럽게 변형하세요. **"안녕하세요, 아기부리새예요.🙌"는 그 줄에서 끝내고, 빈 줄로 문단을 나눈 뒤 이어지는 "[주제] 지금 바로 시작합니닷..." 부분을 별도 문단으로 쓰세요.**
 - 서두 직후 핵심 일정/조건을 인용구(각 줄 맨 앞에 "> ")로 요약하세요(예: "출산예정일 : ...", "육아휴직일정 : ..."). \`<blockquote>\` 같은 HTML 태그는 쓰지 마세요.
 - 본문은 번호 매긴 절차 목록(1. 2. 3.)으로 전개하고, 화면의 버튼/메뉴명은 대괄호로 표시하세요(예: "1. [고용24] 홈페이지 접속 2. 좌측 상단 [기업] 클릭"). 소제목이 있다면 줄 다음에 반드시 빈 줄을 넣어 본문과 분리하세요.
 - 놓치면 안 되는 조건/기한/주의사항은 **볼드**로 강조하세요(예: "**휴가 시작일 다음 날부터 등록 가능**").
@@ -87,7 +91,7 @@ const CATEGORY_STYLE_NOTES: Record<
     imagesPerParagraphs: 2,
     allowAiFallback: false,
     notes: `- 방문한 장소(숙소, 시설, 여행지, 액티비티, 공연, 체험 등) 후기 글입니다. 아래는 이 카테고리 실제 글 20편을 전수 분석해 확인한 패턴입니다. 맛집과 서두·인용구·지도 마무리 뼈대는 같지만, 장소 유형에 따라 세부가 달라지니 글 내용에 맞는 유형을 판단해서 적용하세요.
-- 서두는 "안녕하세요, 아기부리새예요.🙌" + 훅 한 줄 + "지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧"로 이어지는 고정 인사말을 그대로(또는 거의 그대로) 재현하세요. **이 인사말 전체는 줄바꿈 없이 하나의 문단으로 이어 쓰세요.**
+- 서두는 "안녕하세요, 아기부리새예요.🙌" + 훅 한 줄 + "지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧"로 이어지는 고정 인사말을 그대로(또는 거의 그대로) 재현하세요. **"안녕하세요, 아기부리새예요.🙌"는 그 줄에서 끝내고, 빈 줄로 문단을 나눈 뒤 이어지는 훅 한 줄 + "지금 바로 시작합니닷..." 부분을 별도 문단으로 쓰세요.**
 - 상단 정보 인용구(각 줄 맨 앞에 "> ", \`<blockquote>\` 금지)는 장소 유형에 맞는 항목으로 구성하세요("확인된 매장 정보"에 실제로 주어진 항목만 쓰고 없는 항목은 지어내지 마세요):
   - 시설/액티비티(클라이밍, 뷰티샵 등): 주소/전화/영업시간/주차/화장실
   - 숙소: 주소/전화/주차/체크인/체크아웃/메모
@@ -106,7 +110,7 @@ const CATEGORY_STYLE_NOTES: Record<
     imagesPerParagraphs: 2,
     allowAiFallback: false,
     notes: `- 방문한 맛집/카페 후기 글입니다. 아래는 이 카테고리 실제 글 56개를 전수 분석해 확인한 고정 패턴이니 최대한 그대로 따르세요.
-- 서두는 거의 항상 "안녕하세요, 아기부리새예요.🙌" 로 시작해서 가게 특징을 담은 짧은 훅 한 줄을 붙이고, "지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧" 로 이어집니다. 이 인사말과 카오모지를 그대로(또는 거의 그대로) 재현하세요. **이 세 부분("안녕하세요..", 훅 한 줄, "지금 바로 시작합니닷..")은 반드시 줄바꿈 없이 하나의 문단(한 줄)으로 이어 쓰세요** — 문단을 나누면(빈 줄로 분리하면) 이어지는 자연스러운 인사말이 아니라 뚝뚝 끊긴 것처럼 보입니다.
+- 서두는 거의 항상 "안녕하세요, 아기부리새예요.🙌" 로 시작해서 가게 특징을 담은 짧은 훅 한 줄을 붙이고, "지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧" 로 이어집니다. 이 인사말과 카오모지를 그대로(또는 거의 그대로) 재현하세요. **"안녕하세요, 아기부리새예요.🙌"는 그 줄에서 끝내고, 빈 줄로 문단을 나눈 뒤 이어지는 훅 한 줄 + "지금 바로 시작합니닷..." 부분을 별도 문단으로 쓰세요.**
 - 그다음 매장 정보를 인용구(각 줄 맨 앞에 "> ")로 정리하되, 실제로 확인된 항목만 반드시 "주소 / 전화 / 영업시간 / 주차 / 화장실" 순서로 넣으세요(없는 항목은 생략 — 지어내지 마세요, \`<blockquote>\` 같은 HTML 태그는 쓰지 마세요). 실제 형식 예시:
   > 주소 : 광주 남구 노대실로34번길 14
   > 전화 : 062-652-9265
@@ -119,8 +123,10 @@ const CATEGORY_STYLE_NOTES: Record<
 - 마무리는 반드시 이 순서를 지키세요: (1) 총평 2~4문장 → (2) "위치는 요기 ▼" 한 줄 다음에 참고링크(지도) 마커를 그대로 남기기(위 "위치 링크 유지 규칙" 참고) → (3) "👋그럼 다들 [맛있는/즐거운/평화로운] 하루 보내세요.👋" 같은 짧은 인사. 지도가 총평보다 먼저 오면 안 됩니다. "공감/댓글 부탁드립니다" 같은 CTA 문구는 최근 글에는 없으니 쓰지 마세요.
 - 문장 종결은 "~다."뿐 아니라 "~음."(명사형 캐주얼 종결, 예: "고기가 엄청 부드러움."), "~인 듯/듯."(추측형)을 자주 섞고, 가끔 "..ㅋㅋㅋ"로 얼버무리듯 끝내거나 "~당"(애교체, 예: "깜빡했당🙄")을 쓰세요.
 - 해시태그는 6~10개: "#상호명" 1~2개 + "#지역+맛집/카페/이자카야" 조합 여러 개 + "#지역+상호명" 결합형 + 대표 메뉴/특징 태그 1~2개로 구성하세요.
-- 실제 글 발췌(말투·구성 참고용, 내용은 무시):
-  > 안녕하세요, 아기부리새예요.🙌 소주 세 병 순삭, 조봉순상무국밥 노대점 지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧ (...) 국밥 첫 입 먹고 "오~"하고 곱창 한 입 먹고 두 눈 똥그랗게 떠서 서로를 바라본..ㅋㅋㅋ 쀼찬이랑 먹는 내내 "맛있다~ 맛있다~🤤"하며 너무너무너무x5 만족스럽게 먹고 나왔다. 광주가면 다음에 꼭! 또! 가야지. 👋그럼 다들 맛있는 하루 보내세요.👋
+- 실제 글 발췌(말투·구성 참고용, 내용은 무시. 인사말 줄바꿈 예시이므로 첫 줄과 둘째 줄이 별도 문단인 것에 주의):
+  > 안녕하세요, 아기부리새예요.🙌
+  >
+  > 소주 세 병 순삭, 조봉순상무국밥 노대점 지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧ (...) 국밥 첫 입 먹고 "오~"하고 곱창 한 입 먹고 두 눈 똥그랗게 떠서 서로를 바라본..ㅋㅋㅋ 쀼찬이랑 먹는 내내 "맛있다~ 맛있다~🤤"하며 너무너무너무x5 만족스럽게 먹고 나왔다. 광주가면 다음에 꼭! 또! 가야지. 👋그럼 다들 맛있는 하루 보내세요.👋
   > 여기는... 정말 맛있다. 친한 친구들과는 여기서 청첩장 모임을 했다. 여기는 1차로 가면 안된다. 아니야, 1차로 가야 한다. 👋그럼 다들 맛있는 하루 보내세요.👋`,
   },
   기타: {
@@ -129,7 +135,7 @@ const CATEGORY_STYLE_NOTES: Record<
     imagesPerParagraphs: 3,
     allowAiFallback: true,
     notes: `- 실제 이 카테고리 글 14편을 전수 분석한 결과, 순수 일상 잡담글은 없고 "이벤트/혜택 공유형"과 "정보/꿀팁형" 두 갈래로만 나뉩니다. 글 내용에 맞는 쪽을 판단해서 적용하세요.
-- 서두는 "안녕하세요, 아기부리새예요.🙌"로 시작하는 고정 인사말을 재현하되, 이벤트형은 "[브랜드/상품명] 이벤트 지금 바로 공유드립니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧", 정보/꿀팁형은 "[주제] 지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧"로 이어가세요. **이 인사말 전체는 줄바꿈 없이 하나의 문단으로 이어 쓰세요.**
+- 서두는 "안녕하세요, 아기부리새예요.🙌"로 시작하는 고정 인사말을 재현하되, 이벤트형은 "[브랜드/상품명] 이벤트 지금 바로 공유드립니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧", 정보/꿀팁형은 "[주제] 지금 바로 시작합니닷 ✧⁺⸜₍ᐢ.𓂂.ᐢ₎⸝⁺✧"로 이어가세요. **"안녕하세요, 아기부리새예요.🙌"는 그 줄에서 끝내고, 빈 줄로 문단을 나눈 뒤 이어지는 나머지 부분을 별도 문단으로 쓰세요.**
 - 이벤트/혜택 공유형은 인사말 직후 다음 문구를 (거의 토씨 그대로) 넣으세요: "추첨 형식이라 100% 받는건 아니지만 받으면 좋으니까 아래 이벤트 내용 보고 괜찮다 싶으면 신청ㄱㄱ! SNS 공유가 필수는 아니지만 이벤트 공유 시 당첨 확률 올라감". 이후 상품에 대한 짧은 감상(1~2문장)만 곁들이고 본문을 길게 늘리지 마세요(실제 글도 150~500자로 짧습니다). 마무리는 "총총" 없이 바로 "👋그럼 다들 좋은 소식있는 하루 보내세요.👋" 같은 인사로 끝내세요.
 - 정보/꿀팁형은 소제목 없이 바로 번호 목록(1. 2. 3...)으로 절차를 서술하고, 필요하면 단계 뒤에 "Tip : ..." 부연 설명을 붙이세요. 결혼/육아처럼 인용구 소제목을 따로 쓰지 않습니다. 마무리는 "공감이랑 댓글 부탁드립니당." + "👋그럼 다들 [주제에 맞는 문구] 보세요.👋" + "[주제] 총총" 순서로 끝내세요.
 - 해시태그는 감성 태그 없이 브랜드명/주제어를 변주한 롱테일로 구성하세요(이벤트형 4~5개, 이벤트 모음형은 브랜드당 2~3개씩 20개 이상도 가능, 정보/꿀팁형 6~7개).`,
@@ -364,14 +370,48 @@ const GREETING_HOOK_PATTERN = /시작합니닷|공유드립니닷/
 // 수 있다(소제목 기반 방식과 달리 위치 오판으로 진짜 음식 매칭을 잘못 막을 위험이 없다).
 const ATMOSPHERE_COMMENT_PATTERN = /분위기|시끌벅적|가요[가는를]|노래가|음악이/
 
+// 마무리 구간(총평 → "위치는 요기 ▼" 지도 위젯 → 마무리 인사 → 해시태그) 전체를 사진
+// 후보에서 제외하기 위한 경계. 기존에는 "마지막 문단"만 제외했는데, 마무리 인사 뒤에
+// 해시태그 문단이 오면 인사말이 더 이상 마지막 문단이 아니게 되어 후보로 오인되고, 그
+// 결과 부족분/폴백 사진이 "👋그럼 다들 맛있는 하루 보내세요.👋" 인사나 지도 위젯 뒤에
+// 붙는 사고가 실측 확인됐다(이 블로그 스타일상 이 신호들은 항상 마무리 전용이다). 지도
+// 위젯 시작, 마무리 인사, 해시태그 중 가장 이른 신호부터 문서 끝까지를 통째로 마무리
+// 구간으로 보고 후보에서 제외한다. 총평 문단은 이 신호들보다 앞이라 계속 후보로 남는다.
+const CLOSING_GREETING_PATTERN = /👋|총총|보내세요|보세요/
+const MAP_LOCATION_PATTERN = /^위치는\s*(요기|여기)/
+
+function computeClosingBoundary(paragraphs: string[]): number {
+  for (let i = 1; i < paragraphs.length; i++) {
+    const p = paragraphs[i].trim()
+    // 이미 삽입된 대표/메뉴판/매장내부 사진 마커("[사진 원본 ...: https://...]")도
+    // https:// 문자열을 포함하므로, 이 검사를 여기 포함하면 리드 사진이 삽입된 자리
+    // 자체를 "마무리 지도 링크"로 오인해 그 이후 전체(메뉴판 소제목 등 정상 본문)를
+    // 통째로 후보에서 제외해버리는 심각한 사고로 이어진다(실측 확인). 사진 마커
+    // 문단은 건너뛰고 나머지 신호만 검사한다.
+    if (p.includes("[사진 원본")) continue
+    if (
+      p.startsWith("#") ||
+      MAP_LOCATION_PATTERN.test(p) ||
+      p.includes("[참고링크") ||
+      /https?:\/\//.test(p) ||
+      CLOSING_GREETING_PATTERN.test(p)
+    ) {
+      return i
+    }
+  }
+  return paragraphs.length - 1
+}
+
 // 이미지 슬롯으로 쓸 수 있는 문단을 필터링한다. 인사말(첫 문단, 쪼개져 있으면 훅 문구가
-// 나오는 문단까지)/마무리·해시태그(마지막 문단), 인용구·해시태그 줄, 이미 사진/링크
-// 마커인 문단, 장면 설명으로 쓰기엔 너무 짧은 문단은 제외한다.
+// 나오는 문단까지)/마무리 구간(closingStart 이후 전체 — 위 CLOSING_GREETING_PATTERN 설명
+// 참고), 인용구·해시태그 줄, 이미 사진/링크 마커인 문단, 장면 설명으로 쓰기엔 너무 짧은
+// 문단은 제외한다.
 function getVisualParagraphCandidates(paragraphs: string[]): number[] {
   const candidates: number[] = []
+  const closingStart = computeClosingBoundary(paragraphs)
   paragraphs.forEach((raw, i) => {
     const p = raw.trim()
-    if (i === 0 || i === paragraphs.length - 1) return
+    if (i === 0 || i >= closingStart) return
     if (!p || p.startsWith(">") || p.startsWith("#")) return
     // 마커가 문단 맨 앞에 있는 흔한 경우뿐 아니라, LLM이 지시를 어기고 앞 텍스트와
     // 마커를 같은 문단에 줄바꿈으로 붙여 쓴 경우(예: "위치는 요기 ▼\n[참고링크...]")도
@@ -432,6 +472,12 @@ function findCandidateAfterHeading(
 }
 
 const MENU_HEADING_PATTERN = /^메뉴(판)?\s*▼?$/
+// "매장 내부 ▼" 소제목 문단 자체를 찾는 패턴. ATMOSPHERE_COMMENT_PATTERN이 이 소제목
+// 다음에 오는 분위기 잡담 문단을 후보에서 제외하므로, findCandidateAfterHeading으로
+// "소제목 다음 후보"를 찾으면 그 잡담을 건너뛰고 엉뚱하게 먼 음식 문단에 사진이 떨어진다
+// (실측 확인된 사고 패턴과 동일한 원리). 그래서 내부 사진은 소제목 문단 자체에 직접
+// appendImageMarker한다(대표 사진과 같은 "후보 목록 무관 강제 배치" 원칙).
+const INTERIOR_HEADING_PATTERN = /^매장\s*내부\s*▼?$/
 
 // 대표(외관) 사진은 "메뉴판 ▼" 같은 소제목보다 먼저 나와야 자연스러운데, 기존에는 그냥
 // "문서 전체에서 가장 앞의 이미지 후보 문단"에 이어붙였다. 맛집 카테고리 프롬프트는
@@ -783,6 +829,79 @@ function splitLongParagraphs(paragraphs: string[], maxLength = 200): string[] {
   return result
 }
 
+// notion.ts의 NARRATIVE_BLOCK_TYPES와 동일한 집합(사진/링크류를 제외한 서술형 블록).
+// notion.ts는 이 상수를 export하지 않으므로 여기서 동일하게 정의해 재사용한다.
+const NARRATIVE_BLOCK_TYPES = new Set<NotionBlock["type"]>([
+  "paragraph",
+  "heading_1",
+  "heading_2",
+  "heading_3",
+  "bulleted_list_item",
+  "numbered_list_item",
+  "quote",
+  "code",
+])
+
+// 첨부 사진의 캡션 매칭 정확도를 높이기 위해, 노션 원본 문서에서 그 사진 "바로 옆"에
+// 저자가 실제로 쓴 텍스트(직전 서술 블록 + 저자 캡션)를 앵커로 재구성한다. 저자가 사진
+// 바로 앞뒤에 쓴 문장은 "사시미", "계란찜", "샐러드"처럼 LLM이 재작성한 문단에서도 거의
+// 그대로 재사용되는 일상 단어일 확률이 높아, 비전으로 새로 생성한 캡션 키워드만 쓸 때보다
+// keywordOverlapScore 적중률이 크게 올라간다(실측 확인된 사고: "사시미 5점" 문단에 엉뚱한
+// 디저트 사진이 붙는 문제의 근본 원인이 이 신호의 미활용이었다).
+// attachment.url은 blocksToAttachments(notion.ts)가 block.imageUrl을 그대로 옮긴 값이라
+// 같은 mapPageToPost 호출 안에서는 문자열 그대로 매칭된다. 본문에 없는 사진("Image" 속성
+// 첨부 등)은 맵에 없어 앵커 ""로 안전하게 저하된다(기존 비전 캡션만 쓰는 수준 유지).
+function buildImageAnchorMap(blocks: NotionBlock[]): Map<string, string> {
+  const map = new Map<string, string>()
+  const pending: string[] = []
+  let lastImageUrl: string | null = null
+
+  for (const block of blocks) {
+    if (block.type === "image" && block.imageUrl) {
+      const anchor = [block.content, pending.at(-1), pending.at(-2)]
+        .filter((v): v is string => Boolean(v && v.trim()))
+        .join(", ")
+      map.set(block.imageUrl, anchor)
+      lastImageUrl = block.imageUrl
+    } else if (NARRATIVE_BLOCK_TYPES.has(block.type) && block.content) {
+      // 사진 바로 다음에 오는 짧은 문단은 그 사진에 대한 저자의 캡션형 코멘트일 확률이
+      // 높으므로(예: 사진 다음 줄에 "사시미 5점이 나왔다"), 앵커가 아직 짧으면 덧붙인다.
+      const prevAnchor = lastImageUrl ? map.get(lastImageUrl) : undefined
+      if (lastImageUrl && prevAnchor !== undefined && prevAnchor.length < 40) {
+        map.set(lastImageUrl, prevAnchor ? `${prevAnchor}, ${block.content}` : block.content)
+      }
+      pending.push(block.content)
+      lastImageUrl = null
+    } else {
+      lastImageUrl = null
+    }
+  }
+
+  return map
+}
+
+// Notion 첨부 URL은 S3 서명 쿼리스트링을 포함하므로, 드물게 같은 세션 안에서도 값이
+// 달라질 가능성에 대비해 경로만으로도 2차 매칭을 시도한다(urlPath와 동일한 원리).
+function urlPathOnly(url: string): string {
+  try {
+    const parsed = new URL(url)
+    return parsed.origin + parsed.pathname
+  } catch {
+    return url
+  }
+}
+
+function lookupAnchor(anchorMap: Map<string, string>, url: string): string {
+  const direct = anchorMap.get(url)
+  if (direct !== undefined) return direct
+
+  const path = urlPathOnly(url)
+  for (const [key, value] of anchorMap) {
+    if (urlPathOnly(key) === path) return value
+  }
+  return ""
+}
+
 interface InsertImagesResult {
   text: string
   leadImageUrl?: string
@@ -919,15 +1038,57 @@ async function insertImages(
     // 문장 중 하나)라 메뉴판 사진이 글 맨 위에 붙어버리는 사고가 실측 확인됐다.
     // 대표 사진과 같은 기준(contentStartIndex, "인사말+매장정보가 끝나는 지점")보다
     // 뒤에 있는 후보를 우선 찾고, 그마저 없을 때만 picker.pick()으로 폴백한다.
+    //
+    // "메뉴판 ▼" 바로 다음에 다른 소제목("매장 내부 ▼" 등)이 곧장 이어지면
+    // findCandidateAfterHeading이 안전하게 undefined를 반환하는데(다른 소제목 구간
+    // 침범 방지), 그다음 폴백이 "문서 전체에서 그냥 가장 이른 후보"를 집어버려서
+    // 메뉴판과 전혀 무관한 문단(예: 샐러드/계란찜 소개 문단)에 메뉴판 사진이 붙는
+    // 사고가 실측 확인됐다. 소제목 자체는 찾았으니, 이 경우엔 대표 사진처럼 소제목
+    // 문단 자신에 직접 붙여 적어도 "메뉴판 ▼" 바로 아래에 위치하도록 한다.
+    const menuHeadingIndex = paragraphs.findIndex((p) => MENU_HEADING_PATTERN.test(p.trim()))
     menuParagraphIndex =
       findCandidateAfterHeading(paragraphs, candidates, MENU_HEADING_PATTERN) ??
+      (menuHeadingIndex !== -1 ? menuHeadingIndex : undefined) ??
       candidates.find((c) => c >= contentStartIndex) ??
       picker.pick()
     appendImageMarker(menuParagraphIndex, menuImageUrl)
     picker.markUsed(menuParagraphIndex)
   }
 
-  // 나머지 첨부 사진(리드/메뉴판으로 뽑히지 않은 것)은 위치 순서가 아니라 캡션 키워드
+  // "매장 내부 ▼" 소제목이 생성되는데도 관련 사진이 하나도 안 붙는 사고를 막기 위해,
+  // 메뉴판과 동일한 원칙(반드시 포함)으로 매장 내부 사진을 찾아 배치한다. 첨부 중 내부로
+  // 판별된 사진이 있으면 그걸 쓰고, 없으면 findInteriorImageViaSearch로 찾는다(place
+  // 등록 사진이 없으면 웹 검색으로도 채운다 — 매장 내부는 외관과 달리 place에 등록된
+  // 사진 자체가 부족한 경우가 흔해, 빈 자리로 남기지 않는 것을 우선한다).
+  const interiorFromAttachmentIndex = analyses.findIndex((a) => a.isInterior)
+  const interiorFromAttachment =
+    interiorFromAttachmentIndex >= 0 ? attachments[interiorFromAttachmentIndex] : undefined
+  let interiorImageUrl: string | undefined = interiorFromAttachment?.url
+  let interiorFromSearch = false
+
+  if (!interiorImageUrl && !allowAiFallback && attachments.length > 0) {
+    const searched = await findInteriorImageViaSearch(apiKey, placeName ?? post.title, placeId)
+    // 외관 사진과 같은 사진이 검색으로 다시 뽑히는 경우(같은 검색 소스에서 대표 사진과
+    // 겹칠 수 있음)를 배제해, 두 소제목 자리에 같은 사진이 중복 배치되는 것을 막는다.
+    if (searched && searched !== leadImageUrl) {
+      interiorImageUrl = searched
+      interiorFromSearch = true
+    }
+  }
+
+  let interiorParagraphIndex: number | undefined
+  if (interiorImageUrl) {
+    const headingIndex = paragraphs.findIndex((p) => INTERIOR_HEADING_PATTERN.test(p.trim()))
+    interiorParagraphIndex =
+      headingIndex !== -1
+        ? headingIndex
+        : candidates.find((c) => c >= contentStartIndex && c !== menuParagraphIndex) ??
+          picker.pick()
+    appendImageMarker(interiorParagraphIndex, interiorImageUrl)
+    picker.markUsed(interiorParagraphIndex)
+  }
+
+  // 나머지 첨부 사진(리드/메뉴판/매장내부로 뽑히지 않은 것)은 위치 순서가 아니라 캡션 키워드
   // 겹침으로 배치한다 — 균등 간격 배치는 "우니초밥을 얘기하는 문단에 엉뚱한 사진이
   // 붙는" 사고의 원인이었다. 메뉴판 사진이 이미 문단을 썼으므로, 후보 목록에서도 그
   // 문단을 미리 제외한다(리드 사진은 별도 문단으로 삽입되어 애초에 candidates에 없다).
@@ -940,16 +1101,28 @@ async function insertImages(
   // 자연스럽게 사진 없는 여백이 생긴다. 매칭이 실패해도(캡션 없음, 겹치는 키워드 없음
   // 등) 첨부 사진은 반드시 결과에 포함해야 하므로(전부 포함 불변식), 아직 사진이 없는
   // 후보 문단을 우선 고르는 picker를 폴백으로 쓴다.
+  // 노션 원본 문서에서 각 첨부 사진 바로 옆에 저자가 실제로 쓴 텍스트를 앵커로
+  // 재구성한다(위 buildImageAnchorMap 설명 참고). 매칭용 캡션에만 결합해 적중률을
+  // 높이고, 그룹핑(groupSimilarImages)은 시각적 유사성 신호를 유지하기 위해 비전
+  // 캡션만 그대로 쓴다.
+  const anchorMap = buildImageAnchorMap(post.blocks ?? [])
+
   const matchableEntries = attachments
-    .map((attachment, i) => ({ attachment, analysis: analyses[i] }))
+    .map((attachment, i) => ({
+      attachment,
+      analysis: analyses[i],
+      anchor: lookupAnchor(anchorMap, attachment.url),
+    }))
     .filter(
       ({ attachment }) =>
-        attachment.url !== leadFromAttachment?.url && attachment.url !== menuFromAttachment?.url
+        attachment.url !== leadFromAttachment?.url &&
+        attachment.url !== menuFromAttachment?.url &&
+        attachment.url !== interiorFromAttachment?.url
     )
 
   if (matchableEntries.length > 0) {
     const reservedParagraphs = new Set(
-      [menuParagraphIndex].filter((v): v is number => v !== undefined)
+      [menuParagraphIndex, interiorParagraphIndex].filter((v): v is number => v !== undefined)
     )
     const basePool = candidates.filter((index) => !reservedParagraphs.has(index))
     const middleCandidates = trimHeadAndTail(basePool)
@@ -958,7 +1131,15 @@ async function insertImages(
     const groupCaptions = groupSimilarImages(matchableEntries.map(({ analysis }) => analysis.caption)).map(
       (group) => ({
         members: group,
-        caption: group.map((memberIndex) => matchableEntries[memberIndex].analysis.caption).join(", "),
+        // 매칭 점수 계산에만 앵커(저자가 실제로 쓴 인접 텍스트)를 비전 캡션에 덧붙인다 —
+        // LLM이 재작성한 문단은 저자의 원본 단어(예: "사시미", "계란찜")를 그대로 재사용할
+        // 확률이 높아, 새로 생성한 비전 캡션 키워드만 쓸 때보다 적중률이 크게 오른다.
+        caption: group
+          .map((memberIndex) => {
+            const entry = matchableEntries[memberIndex]
+            return [entry.analysis.caption, entry.anchor].filter(Boolean).join(", ")
+          })
+          .join(", "),
       })
     )
     const groupMatchedIndexes = matchImagesToParagraphs(
@@ -1013,11 +1194,11 @@ async function insertImages(
   }
 
   // STEP 3: 부족분(검색/AI 생성)으로 채운다 — 아직 사진이 없는 후보 문단을 우선으로 고른다.
-  // 리드/메뉴판 사진을 검색으로 찾았다면(leadFromSearch/menuFromSearch) 그만큼 부족분
-  // 슬롯을 줄인다(이미 그 자리들을 채웠으므로 전체 이미지 개수가 카테고리 목표치와
-  // 계속 일치하게 한다).
+  // 리드/메뉴판/매장내부 사진을 검색으로 찾았다면(leadFromSearch/menuFromSearch/
+  // interiorFromSearch) 그만큼 부족분 슬롯을 줄인다(이미 그 자리들을 채웠으므로 전체
+  // 이미지 개수가 카테고리 목표치와 계속 일치하게 한다).
   const effectiveShortfall = Math.max(
-    shortfall - (leadFromSearch ? 1 : 0) - (menuFromSearch ? 1 : 0),
+    shortfall - (leadFromSearch ? 1 : 0) - (menuFromSearch ? 1 : 0) - (interiorFromSearch ? 1 : 0),
     0
   )
   const shortfallPoints: number[] = []

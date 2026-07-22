@@ -21,6 +21,10 @@ const MENU_CLASSIFY_PROMPT = `이 사진이 가게/매장의 메뉴판(가격이
 음식 자체 클로즈업, 실내 인테리어, 건물 외관, 사람 얼굴 클로즈업 등은 메뉴판 사진이 아닙니다.
 메뉴판 사진이면 정확히 "예"만, 아니면 정확히 "아니오"만 답하세요.`
 
+const INTERIOR_CLASSIFY_PROMPT = `이 사진이 가게/매장의 내부(실내 인테리어, 좌석, 테이블, 홀 전경 등)를 보여주는 사진인지 판단해주세요.
+음식 자체 클로즈업, 메뉴판, 건물 외관(정면/간판/입구), 사람 얼굴 클로즈업 등은 매장 내부 사진이 아닙니다.
+매장 내부 사진이면 정확히 "예"만, 아니면 정확히 "아니오"만 답하세요.`
+
 // 검색 후보 검증은 슬롯 하나를 채우는 것과 같은 비중이므로, 다른 슬롯 채우기(최대 6회)와
 // 비슷한 예산으로 제한한다 — 첨부 사진에 외관/메뉴판 사진이 없을 때만 도는 폴백 경로라
 // 자주 호출되지는 않지만, 후보를 무제한 검증하면 비전 호출이 불필요하게 쌓일 수 있다.
@@ -109,4 +113,21 @@ export async function findMenuImageViaSearch(
 ): Promise<string | null> {
   const query = `${cleanTitleForSearch(postTitle)} 메뉴판`
   return findCategoryImage(apiKey, query, placeId, MENU_CLASSIFY_PROMPT, true, "MENU")
+}
+
+/**
+ * 가게 매장 내부(인테리어) 사진을 찾아 검증까지 통과한 URL을 반환한다. 찾지 못하면 null.
+ *
+ * placeId로 등록된 사진 중에 내부 사진이 없으면(작은 매장은 AI 분류/등록 사진 자체가
+ * 부족한 경우가 흔함) 상호명 텍스트 웹 검색도 추가로 시도한다 — 사용자 요청: "매장 내부"
+ * 소제목이 생성되면 관련 사진이 반드시 있어야 하므로, 외관/메뉴판보다 신뢰도 기준을
+ * 다소 완화해(웹 검색 폴백 허용) 빈 자리로 남기지 않는다.
+ */
+export async function findInteriorImageViaSearch(
+  apiKey: string,
+  postTitle: string,
+  placeId?: string | null
+): Promise<string | null> {
+  const query = `${cleanTitleForSearch(postTitle)} 내부`
+  return findCategoryImage(apiKey, query, placeId, INTERIOR_CLASSIFY_PROMPT, true, "INTERIOR")
 }

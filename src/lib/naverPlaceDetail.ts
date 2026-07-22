@@ -266,7 +266,7 @@ export async function fetchNaverPlaceDetail(placeId: string): Promise<NaverPlace
   }
 }
 
-export type NaverPlaceAiPhotoCategory = "EXTERIOR" | "MENU"
+export type NaverPlaceAiPhotoCategory = "EXTERIOR" | "MENU" | "INTERIOR"
 
 interface PhotoViewerImageRaw {
   originalUrl?: string

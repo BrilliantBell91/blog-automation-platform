@@ -16,6 +16,7 @@ export interface ImageAnalysis {
   caption: string
   isExterior: boolean
   isMenu: boolean
+  isInterior: boolean
 }
 
 // Notion 첨부 사진의 label은 대개 원본 파일명("20180206_195520.jpg", "KakaoTalk_
@@ -30,23 +31,29 @@ export interface ImageAnalysis {
 // 않으므로 기존 동작(사람이 입력한 캡션은 그대로 재사용)은 그대로 유지된다.
 const MEANINGLESS_LABEL_PATTERN = /^[a-z0-9_\-\s.]+\.(jpe?g|png|heic|webp|gif)$/i
 
-// 라벨 텍스트만으로 외관/메뉴판 사진 여부를 저비용으로 추정한다(비전 호출 없음).
+// 라벨 텍스트만으로 외관/메뉴판/매장 내부 사진 여부를 저비용으로 추정한다(비전 호출 없음).
 const EXTERIOR_LABEL_HINT = /외관|간판|입구|정면|건물/
 const MENU_LABEL_HINT = /메뉴판|메뉴 사진|가격표|메뉴 리스트/
+const INTERIOR_LABEL_HINT = /내부|인테리어|실내|홀/
 
 const BATCH_SIZE = 5
 
 const BATCH_ANALYSIS_PROMPT = `아래 사진들을 순서대로 분석해서, 각 사진마다 한 줄씩 다음 형식으로만 답하세요:
-N) 키워드1, 키워드2 | 예 또는 아니오 | 예 또는 아니오
+N) 키워드1, 키워드2 | 예 또는 아니오 | 예 또는 아니오 | 예 또는 아니오
 
 - 키워드: 그 사진의 핵심 피사체를 2~4개의 짧은 한국어 단어로 쉼표 구분해서 나열 (예: "우니, 초밥, 클로즈업"). 반드시 한국 블로거가 실제로 쓰는 일상적인 한국어 음식 이름을 쓰고, "자완무시"(→계란찜), "타다키"(→겉불에 살짝 구운 회) 같은 격식체/일본어 원어 표기는 쓰지 마세요 — 본문 캡션 매칭이 문단 텍스트의 실제 단어와 겹치는지로 이뤄지는데, 블로그 본문은 항상 일상 한국어 명칭을 쓰기 때문에 격식체 키워드는 매칭에 실패해 사진이 엉뚱한 문단에 배치되는 원인이 됩니다. 또한 "새우", "회"처럼 조리법 없이 재료명만 단독으로 쓰지 마세요 — 같은 재료라도 조리법이 다르면(예: 볶은 새우 요리 vs 회로 먹는 단새우) 전혀 다른 사진인데, 재료명만 쓰면 그 재료가 언급된 다른 문단과 잘못 매칭됩니다. 조리법/형태를 붙인 구체적인 이름을 쓰세요(예: 볶은 새우 요리라면 "새우볶음"처럼 붙여쓰기, 날것 그대로의 단새우라면 "단새우").
 - 첫 번째 예/아니오: 그 사진이 가게/매장/장소의 외관(건물 정면, 간판이 보이는 입구, 외부 전경)이면 "예", 아니면 "아니오"
 - 두 번째 예/아니오: 그 사진이 메뉴판(가격이 적힌 메뉴 목록/메뉴판 사진)이면 "예", 아니면 "아니오"
+- 세 번째 예/아니오: 그 사진이 매장 내부(실내 인테리어, 좌석, 테이블, 홀 전경 등 음식이 클로즈업되지 않은 실내 전경)면 "예", 아니면 "아니오"
 - 사진 번호(N)는 반드시 실제 순서와 일치시키고, 다른 설명 없이 위 형식의 줄만 그대로 출력하세요.`
 
+// 네 번째 필드(매장 내부 여부)는 선택적으로 파싱한다 — 비전 모델이 프롬프트 지시를
+// 어기고 예전 3필드 형식으로만 답하는 경우에도 캡션/외관/메뉴판 판정까지는 안전하게
+// 건지기 위함이다(4번째 필드가 없으면 isInterior는 기본값 false로 남는다).
 function parseBatchAnalysis(text: string, count: number): (ImageAnalysis | null)[] {
   const results: (ImageAnalysis | null)[] = Array.from({ length: count }, () => null)
-  const lineRegex = /^(\d+)\)\s*(.+?)\s*\|\s*(예|아니오)\s*\|\s*(예|아니오)\s*$/gm
+  const lineRegex =
+    /^(\d+)\)\s*(.+?)\s*\|\s*(예|아니오)\s*\|\s*(예|아니오)(?:\s*\|\s*(예|아니오))?\s*$/gm
   let match: RegExpExecArray | null
   while ((match = lineRegex.exec(text)) !== null) {
     const index = Number(match[1]) - 1
@@ -55,6 +62,7 @@ function parseBatchAnalysis(text: string, count: number): (ImageAnalysis | null)
       caption: match[2].trim().slice(0, 60),
       isExterior: match[3] === "예",
       isMenu: match[4] === "예",
+      isInterior: match[5] === "예",
     }
   }
   return results
@@ -72,7 +80,12 @@ export async function analyzeImagesBatch(
   apiKey: string,
   images: { url: string; existingLabel?: string }[]
 ): Promise<ImageAnalysis[]> {
-  const results: ImageAnalysis[] = images.map(() => ({ caption: "", isExterior: false, isMenu: false }))
+  const results: ImageAnalysis[] = images.map(() => ({
+    caption: "",
+    isExterior: false,
+    isMenu: false,
+    isInterior: false,
+  }))
   const needsVision: { originalIndex: number; url: string }[] = []
 
   images.forEach((image, i) => {
@@ -82,6 +95,7 @@ export async function analyzeImagesBatch(
         caption: label,
         isExterior: EXTERIOR_LABEL_HINT.test(label),
         isMenu: MENU_LABEL_HINT.test(label),
+        isInterior: INTERIOR_LABEL_HINT.test(label),
       }
     } else {
       needsVision.push({ originalIndex: i, url: image.url })

@@ -20,7 +20,9 @@ describe("imageMatching", () => {
         { url: "https://example.com/1.jpg", existingLabel: "가게 외관 사진" },
       ])
 
-      expect(result).toEqual([{ caption: "가게 외관 사진", isExterior: true, isMenu: false }])
+      expect(result).toEqual([
+        { caption: "가게 외관 사진", isExterior: true, isMenu: false, isInterior: false },
+      ])
       expect(runVisionPromptBatchMock).not.toHaveBeenCalled()
     })
 
@@ -29,7 +31,9 @@ describe("imageMatching", () => {
         { url: "https://example.com/1.jpg", existingLabel: "메뉴판 사진" },
       ])
 
-      expect(result).toEqual([{ caption: "메뉴판 사진", isExterior: false, isMenu: true }])
+      expect(result).toEqual([
+        { caption: "메뉴판 사진", isExterior: false, isMenu: true, isInterior: false },
+      ])
       expect(runVisionPromptBatchMock).not.toHaveBeenCalled()
     })
 
@@ -43,7 +47,9 @@ describe("imageMatching", () => {
         { url: "https://example.com/1.jpg", existingLabel: "20180206_195520.jpg" },
       ])
 
-      expect(result).toEqual([{ caption: "우니, 초밥, 클로즈업", isExterior: false, isMenu: false }])
+      expect(result).toEqual([
+        { caption: "우니, 초밥, 클로즈업", isExterior: false, isMenu: false, isInterior: false },
+      ])
     })
 
     it("비전 배치 응답에서 메뉴판 여부(두 번째 예/아니오)도 함께 파싱한다", async () => {
@@ -56,7 +62,50 @@ describe("imageMatching", () => {
         { url: "https://example.com/1.jpg", existingLabel: "20180206_195520.jpg" },
       ])
 
-      expect(result).toEqual([{ caption: "메뉴판, 가격표", isExterior: false, isMenu: true }])
+      expect(result).toEqual([
+        { caption: "메뉴판, 가격표", isExterior: false, isMenu: true, isInterior: false },
+      ])
+    })
+
+    it("비전 배치 응답에서 매장 내부 여부(세 번째 예/아니오, 4필드 형식)도 함께 파싱한다", async () => {
+      runVisionPromptBatchMock.mockResolvedValueOnce({
+        successIndexes: [0],
+        text: "1) 테이블, 좌석 | 아니오 | 아니오 | 예",
+      })
+
+      const result = await analyzeImagesBatch("test-key", [
+        { url: "https://example.com/1.jpg", existingLabel: "20180206_195520.jpg" },
+      ])
+
+      expect(result).toEqual([
+        { caption: "테이블, 좌석", isExterior: false, isMenu: false, isInterior: true },
+      ])
+    })
+
+    it("4번째 필드(매장 내부 여부)가 없는 구 3필드 형식도 하위 호환으로 파싱하고 isInterior는 false로 남긴다", async () => {
+      runVisionPromptBatchMock.mockResolvedValueOnce({
+        successIndexes: [0],
+        text: "1) 우니, 초밥 | 아니오 | 아니오",
+      })
+
+      const result = await analyzeImagesBatch("test-key", [
+        { url: "https://example.com/1.jpg", existingLabel: "20180206_195520.jpg" },
+      ])
+
+      expect(result).toEqual([
+        { caption: "우니, 초밥", isExterior: false, isMenu: false, isInterior: false },
+      ])
+    })
+
+    it("라벨에 매장 내부 관련 단어가 있으면 비전 호출 없이 매장 내부로 판정한다", async () => {
+      const result = await analyzeImagesBatch("test-key", [
+        { url: "https://example.com/1.jpg", existingLabel: "매장 내부 인테리어" },
+      ])
+
+      expect(result).toEqual([
+        { caption: "매장 내부 인테리어", isExterior: false, isMenu: false, isInterior: true },
+      ])
+      expect(runVisionPromptBatchMock).not.toHaveBeenCalled()
     })
 
     it("영문자가 섞인 메신저/카메라 앱 자동 파일명(예: 카카오톡 전송 파일명)도 의미 없는 라벨로 판정해 비전 배치 호출로 캡션을 생성한다 (회귀 테스트)", async () => {
@@ -73,7 +122,9 @@ describe("imageMatching", () => {
       ])
 
       expect(runVisionPromptBatchMock).toHaveBeenCalledTimes(1)
-      expect(result).toEqual([{ caption: "가게 외관, 간판", isExterior: true, isMenu: false }])
+      expect(result).toEqual([
+        { caption: "가게 외관, 간판", isExterior: true, isMenu: false, isInterior: false },
+      ])
     })
 
     it("여러 장을 배치 크기(5장) 단위로 나눠 여러 번 호출한다", async () => {
@@ -92,7 +143,7 @@ describe("imageMatching", () => {
 
       expect(runVisionPromptBatchMock).toHaveBeenCalledTimes(2)
       expect(result).toHaveLength(6)
-      expect(result[5]).toEqual({ caption: "f", isExterior: true, isMenu: false })
+      expect(result[5]).toEqual({ caption: "f", isExterior: true, isMenu: false, isInterior: false })
     })
 
     it("배치 호출이 완전히 실패해도(text: null) 전체를 버리지 않고 빈 캡션으로 폴백한다", async () => {
@@ -104,8 +155,8 @@ describe("imageMatching", () => {
       ])
 
       expect(result).toEqual([
-        { caption: "", isExterior: false, isMenu: false },
-        { caption: "", isExterior: false, isMenu: false },
+        { caption: "", isExterior: false, isMenu: false, isInterior: false },
+        { caption: "", isExterior: false, isMenu: false, isInterior: false },
       ])
     })
 
@@ -121,8 +172,13 @@ describe("imageMatching", () => {
         { url: "https://example.com/2.jpg" },
       ])
 
-      expect(result[0]).toEqual({ caption: "라떼, 커피잔", isExterior: false, isMenu: false })
-      expect(result[1]).toEqual({ caption: "", isExterior: false, isMenu: false })
+      expect(result[0]).toEqual({
+        caption: "라떼, 커피잔",
+        isExterior: false,
+        isMenu: false,
+        isInterior: false,
+      })
+      expect(result[1]).toEqual({ caption: "", isExterior: false, isMenu: false, isInterior: false })
     })
   })
 
