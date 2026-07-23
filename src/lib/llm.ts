@@ -120,6 +120,7 @@ const CATEGORY_STYLE_NOTES: Record<
   > 주차 : X (가게 앞 길가에 주차 가능한듯)
   > 화장실 : 남여 공용, 내부에 위치
 - 본문은 "메뉴판 ▼" 소제목 → "매장 내부 ▼" 소제목(외관/인테리어 사진 자리) → 음식·음료 사진별 코멘트(사진 한 자리당 1~2문장, 최대 3문장) 순서로 전개하세요. 소제목은 그 줄에 짧게 쓰고 별도 문단으로 분리하세요.
+- "매장 내부 ▼" 섹션은 분위기·인테리어 묘사만 1~2문장으로 짧게 쓰세요(예: "생각보다 시끌벅적한 분위기다. 가요도 나오고 북적북적한 느낌"). 방문 목적이나 "비추/추천", "당황했다" 같은 총평성 판단은 이 섹션에 쓰지 말고, 반드시 글 마지막 총평 문단에서만 종합하세요.
 - 마무리는 반드시 이 순서를 지키세요: (1) 총평 2~4문장 → (2) "위치는 요기 ▼" 한 줄 다음에 참고링크(지도) 마커를 그대로 남기기(위 "위치 링크 유지 규칙" 참고) → (3) "👋그럼 다들 [맛있는/즐거운/평화로운] 하루 보내세요.👋" 같은 짧은 인사. 지도가 총평보다 먼저 오면 안 됩니다. "공감/댓글 부탁드립니다" 같은 CTA 문구는 최근 글에는 없으니 쓰지 마세요.
 - 문장 종결은 "~다."뿐 아니라 "~음."(명사형 캐주얼 종결, 예: "고기가 엄청 부드러움."), "~인 듯/듯."(추측형)을 자주 섞고, 가끔 "..ㅋㅋㅋ"로 얼버무리듯 끝내거나 "~당"(애교체, 예: "깜빡했당🙄")을 쓰세요.
 - 해시태그는 6~10개: "#상호명" 1~2개 + "#지역+맛집/카페/이자카야" 조합 여러 개 + "#지역+상호명" 결합형 + 대표 메뉴/특징 태그 1~2개로 구성하세요.
@@ -506,7 +507,9 @@ function findLeadInsertionIndex(paragraphs: string[]): number {
       }
     }
   }
-  while (idx < paragraphs.length && paragraphs[idx].trim().startsWith(">")) idx++
+  // 예전엔 여기서 매장정보 인용구(">"로 시작하는 문단)까지 건너뛰어 대표(외관) 사진이
+  // 매장정보 아래에 배치됐다. 사용자 요청(외관 사진이 먼저, 매장정보는 그 아래)에 따라
+  // 인사말 직후 지점을 그대로 반환해 매장정보 인용구보다 앞에 사진이 삽입되게 한다.
   return idx
 }
 
@@ -907,6 +910,13 @@ interface InsertImagesResult {
   leadImageUrl?: string
 }
 
+// 아이스크림 등 디저트는 오마카세 코스 특성상 항상 마지막 순서에 나와야 자연스러운데,
+// 노션에는 사진이 순서 없이 아무렇게나 첨부되고 캡션 키워드 매칭도 위치를 고려하지
+// 않아 중간 문단에 뜬금없이 디저트 사진이 배치되는 사고가 실측 확인됐다. 캡션에 이
+// 패턴이 매치되면 일반 그룹 매칭에서 미리 빼내 뒤쪽 구간 전용으로 처리한다(아래
+// insertImages의 dessertEntries 참고).
+const DESSERT_CAPTION_PATTERN = /아이스크림|디저트|셔벗|빙수|파르페|마카롱|후식/
+
 // 사용자 첨부 사진과 부족분(실사 검색/AI 생성)을 모두 서술형 문단 사이사이에 프로그래밍적으로
 // 끼워넣는다. 첨부 사진의 URL은 LLM에게 애초에 주지 않으므로(위 formatImageAttachmentHints
 // 참고) 여기서 코드가 직접 삽입해야 실제로 첨부한 사진이 결과에 반드시 포함된다.
@@ -970,13 +980,14 @@ async function insertImages(
     }
   }
 
-  // 대표(외관) 사진은 이미지 후보 계산보다 먼저, 인사말+매장정보 블록 바로 다음(모든
-  // 소제목보다 앞)에 독립된 문단으로 끼워넣는다. 뒤이어 계산하는 candidates는 이 삽입이
-  // 반영된 배열 기준이라, 이 문단은 마커만 있는 문단이라 후보에서 자동 제외되고(
-  // getVisualParagraphCandidates의 마커 검사) 이후 인덱스도 이 삽입 이후 값으로 일관된다.
-  // insertAt은 리드 사진 삽입 여부와 무관하게 "인사말+매장정보가 끝나는 지점"을 가리키므로,
-  // 아래 메뉴판 배치 폴백에서도 재사용한다(대표사진과 같은 사고 — 소제목을 못 찾은 폴백이
-  // 문서에서 가장 이른 후보를 집어 아직 인사말이 안 끝난 자리에 붙는 것을 막기 위함).
+  // 대표(외관) 사진은 이미지 후보 계산보다 먼저, 인사말 바로 다음(매장정보 인용구·모든
+  // 소제목보다 앞, 사용자 요청에 따른 순서)에 독립된 문단으로 끼워넣는다. 뒤이어 계산하는
+  // candidates는 이 삽입이 반영된 배열 기준이라, 이 문단은 마커만 있는 문단이라 후보에서
+  // 자동 제외되고(getVisualParagraphCandidates의 마커 검사) 이후 인덱스도 이 삽입 이후
+  // 값으로 일관된다. insertAt은 리드 사진 삽입 여부와 무관하게 "인사말이 끝나는 지점"을
+  // 가리키므로, 아래 메뉴판 배치 폴백에서도 재사용한다(대표사진과 같은 사고 — 소제목을
+  // 못 찾은 폴백이 문서에서 가장 이른 후보를 집어 아직 인사말이 안 끝난 자리에 붙는 것을
+  // 막기 위함).
   const insertAt = findLeadInsertionIndex(paragraphs)
   const contentStartIndex = leadImageUrl ? insertAt + 1 : insertAt
   if (leadImageUrl) {
@@ -1003,12 +1014,23 @@ async function insertImages(
   const picker = createLeastUsedPicker(candidates)
 
   const result = [...paragraphs]
-  // 배열에 새 원소를 끼워넣는 대신 대상 문단 뒤에 마커를 이어붙이므로 인덱스가 밀리지 않는다.
-  // 같은 문단에 마커가 여러 개 이어붙는 것도 안전하게 처리된다(비슷한 사진끼리 묶이는 효과).
+  // 배열에 새 원소를 끼워넣는 대신 대상 문단 뒤/앞에 마커를 붙이므로 인덱스가 밀리지 않는다.
+  // 같은 문단에 마커가 여러 개 붙는 것도 안전하게 처리된다(비슷한 사진끼리 묶이는 효과).
+  const buildImageMarker = (imageUrl: string) =>
+    `[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${imageUrl}]`
   const appendImageMarker = (paragraphIndex: number, imageUrl: string) => {
-    result[paragraphIndex] =
-      result[paragraphIndex] +
-      `\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: ${imageUrl}]`
+    result[paragraphIndex] = result[paragraphIndex] + `\n\n${buildImageMarker(imageUrl)}`
+  }
+  // 글의 기본 구조를 "사진 → 설명"으로 해달라는 요청에 따라, 소제목이 아닌 실제 서술
+  // 문단에는 사진 마커를 텍스트 뒤가 아니라 앞에 붙인다. 다만 즉시 prepend하면 같은
+  // 문단에 사진이 여러 장 붙을 때(그룹 배치) 나중에 붙인 사진이 먼저 붙은 사진보다
+  // 위로 올라가 순서가 뒤집히므로, 큐에 순서대로 모아뒀다가 모든 배치가 끝난 뒤
+  // 한 번에 문단 앞에 합친다(아래 최종 반환 직전 flush 참고).
+  const pendingLeadingMarkers = new Map<number, string[]>()
+  const prependImageMarker = (paragraphIndex: number, imageUrl: string) => {
+    const queue = pendingLeadingMarkers.get(paragraphIndex) ?? []
+    queue.push(buildImageMarker(imageUrl))
+    pendingLeadingMarkers.set(paragraphIndex, queue)
   }
 
   // 메뉴판 사진도 대표(외관) 사진과 동일한 원칙으로 반드시 포함시킨다(사용자 요청) —
@@ -1051,7 +1073,13 @@ async function insertImages(
       (menuHeadingIndex !== -1 ? menuHeadingIndex : undefined) ??
       candidates.find((c) => c >= contentStartIndex) ??
       picker.pick()
-    appendImageMarker(menuParagraphIndex, menuImageUrl)
+    // 대체 후보가 없어 소제목 문단 자체로 폴백한 경우는 사진이 소제목보다 위로 올라가면
+    // 어색하므로 그대로 뒤에 붙이고, 실제 서술 문단이면 "사진 → 설명" 순서(사용자 요청)로 앞에 붙인다.
+    if (menuParagraphIndex === menuHeadingIndex) {
+      appendImageMarker(menuParagraphIndex, menuImageUrl)
+    } else {
+      prependImageMarker(menuParagraphIndex, menuImageUrl)
+    }
     picker.markUsed(menuParagraphIndex)
   }
 
@@ -1084,7 +1112,11 @@ async function insertImages(
         ? headingIndex
         : candidates.find((c) => c >= contentStartIndex && c !== menuParagraphIndex) ??
           picker.pick()
-    appendImageMarker(interiorParagraphIndex, interiorImageUrl)
+    if (interiorParagraphIndex === headingIndex) {
+      appendImageMarker(interiorParagraphIndex, interiorImageUrl)
+    } else {
+      prependImageMarker(interiorParagraphIndex, interiorImageUrl)
+    }
     picker.markUsed(interiorParagraphIndex)
   }
 
@@ -1120,15 +1152,40 @@ async function insertImages(
         attachment.url !== interiorFromAttachment?.url
     )
 
-  if (matchableEntries.length > 0) {
-    const reservedParagraphs = new Set(
-      [menuParagraphIndex, interiorParagraphIndex].filter((v): v is number => v !== undefined)
-    )
-    const basePool = candidates.filter((index) => !reservedParagraphs.has(index))
+  // 디저트로 판별된 사진은 일반 그룹 매칭에서 미리 빼내, 후보 문단 중 뒤쪽(마무리 직전)
+  // 구간에서만 고르도록 별도 처리한다(위 DESSERT_CAPTION_PATTERN 설명 참고).
+  const dessertEntries = matchableEntries.filter(({ analysis }) =>
+    DESSERT_CAPTION_PATTERN.test(analysis.caption)
+  )
+  const nonDessertEntries = matchableEntries.filter(
+    ({ analysis }) => !DESSERT_CAPTION_PATTERN.test(analysis.caption)
+  )
+
+  const reservedByLeadSlots = new Set(
+    [menuParagraphIndex, interiorParagraphIndex].filter((v): v is number => v !== undefined)
+  )
+
+  if (dessertEntries.length > 0) {
+    const basePool = candidates.filter((index) => !reservedByLeadSlots.has(index))
+    const tailPoolSize = Math.max(1, Math.ceil(candidates.length * 0.2))
+    const tailPool = basePool.slice(-tailPoolSize)
+    const dessertPicker = createLeastUsedPicker(tailPool.length > 0 ? tailPool : basePool)
+    dessertEntries.forEach(({ attachment }) => {
+      const paragraphIndex = dessertPicker.pick()
+      prependImageMarker(paragraphIndex, attachment.url)
+      dessertPicker.markUsed(paragraphIndex)
+      picker.markUsed(paragraphIndex)
+      // 이후 nonDessert 배치가 이 문단을 다시 쓰지 않도록 예약 목록에 합류시킨다.
+      reservedByLeadSlots.add(paragraphIndex)
+    })
+  }
+
+  if (nonDessertEntries.length > 0) {
+    const basePool = candidates.filter((index) => !reservedByLeadSlots.has(index))
     const middleCandidates = trimHeadAndTail(basePool)
     const candidateParagraphs = middleCandidates.map((index) => ({ index, text: paragraphs[index] }))
 
-    const groupCaptions = groupSimilarImages(matchableEntries.map(({ analysis }) => analysis.caption)).map(
+    const groupCaptions = groupSimilarImages(nonDessertEntries.map(({ analysis }) => analysis.caption)).map(
       (group) => ({
         members: group,
         // 매칭 점수 계산에만 앵커(저자가 실제로 쓴 인접 텍스트)를 비전 캡션에 덧붙인다 —
@@ -1136,7 +1193,7 @@ async function insertImages(
         // 확률이 높아, 새로 생성한 비전 캡션 키워드만 쓸 때보다 적중률이 크게 오른다.
         caption: group
           .map((memberIndex) => {
-            const entry = matchableEntries[memberIndex]
+            const entry = nonDessertEntries[memberIndex]
             return [entry.analysis.caption, entry.anchor].filter(Boolean).join(", ")
           })
           .join(", "),
@@ -1188,7 +1245,8 @@ async function insertImages(
       middlePicker.markUsed(paragraphIndex)
       picker.markUsed(paragraphIndex)
       group.members.forEach((memberIndex) => {
-        appendImageMarker(paragraphIndex, matchableEntries[memberIndex].attachment.url)
+        // "사진 → 설명" 구조(사용자 요청)로, 사진 마커를 문단 텍스트 뒤가 아니라 앞에 붙인다.
+        prependImageMarker(paragraphIndex, nonDessertEntries[memberIndex].attachment.url)
       })
     })
   }
@@ -1223,7 +1281,13 @@ async function insertImages(
   shortfallPoints.forEach((pointIndex, k) => {
     const imageUrl = shortfallImages[k]
     if (!imageUrl) return
-    appendImageMarker(pointIndex, imageUrl)
+    // 검색/생성으로 채운 부족분도 동일하게 "사진 → 설명" 순서로 붙인다.
+    prependImageMarker(pointIndex, imageUrl)
+  })
+
+  // 큐에 모아둔 "사진 → 설명" 순서 마커를 문단 앞에 최종 반영한다(위 prependImageMarker 설명 참고).
+  pendingLeadingMarkers.forEach((markers, paragraphIndex) => {
+    result[paragraphIndex] = `${markers.join("\n\n")}\n\n${result[paragraphIndex]}`
   })
 
   return { text: result.join("\n\n"), leadImageUrl }

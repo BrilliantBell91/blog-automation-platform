@@ -617,7 +617,7 @@ describe("llm", () => {
       expect(generateContentMock.mock.calls[4][0].model).toBe(MODEL_FALLBACK_CHAIN[1])
     })
 
-    it("사진이 부족하면 서술형 문단 뒤에 AI 생성 이미지가 삽입된다 (allowAiFallback=true인 카테고리만)", async () => {
+    it("사진이 부족하면 서술형 문단 앞에 AI 생성 이미지가 삽입된다 (allowAiFallback=true인 카테고리만)", async () => {
       process.env.LLM_API_KEY = "test-key"
       generateContentMock
         .mockResolvedValueOnce({
@@ -638,7 +638,7 @@ describe("llm", () => {
       const { content: result } = await generateNaverDraft({ ...mockPost, category: "기타" })
 
       expect(result).toBe(
-        "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n마무리 인사."
+        "안녕하세요.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG1]\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사."
       )
       expect(generateContentMock).toHaveBeenCalledTimes(3)
     })
@@ -744,7 +744,7 @@ describe("llm", () => {
       const { content: result } = await generateNaverDraft(mockPost)
 
       expect(result).toBe(
-        "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real2.jpg]\n\n마무리 인사."
+        "안녕하세요.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real2.jpg]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사."
       )
       // 텍스트 생성 1회만 호출되고, 이미지 생성(AI)은 호출되지 않는다
       expect(generateContentMock).toHaveBeenCalledTimes(1)
@@ -949,7 +949,7 @@ describe("llm", () => {
       const { content: result } = await generateNaverDraft({ ...mockPost, category: "기타" })
 
       expect(result).toBe(
-        "안녕하세요.\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n마무리 인사."
+        "안녕하세요.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://search.example.com/real1.jpg]\n\n첫 번째 이야기입니다 여기에는 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: data:image/png;base64,IMG2]\n\n두 번째 이야기입니다 여기에도 사진이 들어갈 만큼 충분히 긴 본문 내용이 있습니다.\n\n마무리 인사."
       )
       expect(generateContentMock).toHaveBeenCalledTimes(2)
     })
@@ -1053,9 +1053,10 @@ describe("llm", () => {
       const menuMarkerIndex = result.indexOf("https://s3.example.com/menu.jpg")
 
       expect(leadImageUrl).toBe("https://s3.example.com/exterior.jpg")
-      // 대표 사진은 인사말 두 문단(훅 문구 포함)과 매장정보 인용구 뒤, 소제목보다 앞에 위치
+      // 대표 사진은 인사말 두 문단(훅 문구 포함) 뒤, 매장정보 인용구·소제목보다 앞에 위치
+      // (사용자 요청: 외관 사진 → 매장정보 순서)
       expect(exteriorMarkerIndex).toBeGreaterThan(hookIndex)
-      expect(exteriorMarkerIndex).toBeGreaterThan(quoteIndex)
+      expect(exteriorMarkerIndex).toBeLessThan(quoteIndex)
       expect(exteriorMarkerIndex).toBeLessThan(menuHeadingIndex)
       // 인사말 두 문단 사이(그리팅~훅) 어디에도 사진이 끼어들지 않는다
       expect(result.slice(greetingIndex, hookIndex)).not.toContain("[사진 원본")
@@ -1084,7 +1085,7 @@ describe("llm", () => {
       const menuMarkerIndex = result.indexOf("https://s3.example.com/menu.jpg")
 
       expect(menuMarkerIndex).toBeGreaterThan(menuHeadingIndex)
-      expect(menuMarkerIndex).toBeGreaterThan(menuBodyIndex) // 소제목 다음 첫 후보 문단(본문) 뒤에 위치
+      expect(menuMarkerIndex).toBeLessThan(menuBodyIndex) // 소제목 다음 첫 후보 문단(본문) 앞에 위치("사진 → 설명")
     })
 
     it("'메뉴판 ▼' 대신 다른 소제목 표현을 써서 메뉴 소제목을 못 찾아도, 메뉴판 사진이 인사말 근처(글 맨 위)에 붙지 않는다 (회귀 테스트)", async () => {
@@ -1252,8 +1253,8 @@ describe("llm", () => {
       expect(leadImageUrl).toBe("https://s3.example.com/exterior.jpg")
       // 리드 사진은 우니초밥 문단보다도 앞(인사말 바로 다음)에 위치
       expect(exteriorMarkerIndex).toBeLessThan(uniParagraphIndex)
-      // 우니초밥 사진은 캡션이 진짜로 겹치는 그 문단에 정확히 매칭된다
-      expect(uniMarkerIndex).toBeGreaterThan(uniParagraphIndex)
+      // 우니초밥 사진은 캡션이 진짜로 겹치는 그 문단 앞("사진 → 설명")에 정확히 매칭된다
+      expect(uniMarkerIndex).toBeLessThan(uniParagraphIndex)
       expect(uniMarkerIndex).toBeLessThan(dessertParagraphIndex)
     })
 
@@ -1278,11 +1279,11 @@ describe("llm", () => {
       const uniMarkerIndex = result.indexOf("https://s3.example.com/uni.jpg")
       const tiramisuMarkerIndex = result.indexOf("https://s3.example.com/tiramisu.jpg")
 
-      // 우니초밥 사진 마커는 우니초밥 문단과 디저트 문단 사이에 위치해야 한다
-      expect(uniMarkerIndex).toBeGreaterThan(uniParagraphIndex)
+      // 우니초밥 사진 마커는 우니초밥 문단 앞("사진 → 설명"), 디저트 문단보다는 앞에 위치해야 한다
+      expect(uniMarkerIndex).toBeLessThan(uniParagraphIndex)
       expect(uniMarkerIndex).toBeLessThan(dessertParagraphIndex)
-      // 티라미수 사진 마커는 디저트 문단 뒤에 위치해야 한다
-      expect(tiramisuMarkerIndex).toBeGreaterThan(dessertParagraphIndex)
+      // 티라미수 사진 마커는 디저트 문단 자신의 앞에 붙는다(그 문단보다는 뒤가 아니라 바로 앞)
+      expect(tiramisuMarkerIndex).toBeLessThan(dessertParagraphIndex)
     })
 
     it("캡션 매칭이 전부 실패해도(캡션끼리도 무관) 사진들이 서로 다른 후보 문단에 고르게 분산되고 특정 문단에 몰리지 않는다 (회귀 테스트)", async () => {
@@ -1315,15 +1316,10 @@ describe("llm", () => {
         result.indexOf(`https://s3.example.com/${n}.jpg`)
       )
 
-      // 각 마커가 어느 후보 문단 구간(paragraphPositions[i] ~ paragraphPositions[i+1])에
-      // 속하는지 계산해, 다섯 마커가 각기 다른 구간(0~4)에 하나씩 배정됐는지 확인한다.
-      const sectionOf = (pos: number) => {
-        let section = -1
-        paragraphPositions.forEach((start, i) => {
-          if (pos > start) section = i
-        })
-        return section
-      }
+      // 각 마커는 "사진 → 설명" 순서로 자기 문단의 텍스트보다 앞에 붙으므로, 마커
+      // 바로 다음에 오는(=시작 위치가 마커보다 뒤인) 첫 후보 문단이 그 마커가 속한
+      // 구간이다. 다섯 마커가 각기 다른 구간(0~4)에 하나씩 배정됐는지 확인한다.
+      const sectionOf = (pos: number) => paragraphPositions.findIndex((start) => pos < start)
       const sections = markerPositions.map(sectionOf)
 
       expect(sections.every((s) => s >= 0)).toBe(true)
@@ -1355,13 +1351,13 @@ describe("llm", () => {
       const sushiBIndex = result.indexOf("https://s3.example.com/sushi-b.jpg")
       const dessertMarkerIndex = result.indexOf("https://s3.example.com/dessert.jpg")
 
-      // 초밥 두 장은 같은(초밥) 문단 안에, 디저트 문단이 시작되기 전에 함께 위치한다
-      expect(sushiAIndex).toBeGreaterThan(sushiParagraphIndex)
-      expect(sushiBIndex).toBeGreaterThan(sushiParagraphIndex)
+      // 초밥 두 장은 같은(초밥) 문단 바로 앞("사진 → 설명")에, 디저트 문단이 시작되기 전에 함께 위치한다
+      expect(sushiAIndex).toBeLessThan(sushiParagraphIndex)
+      expect(sushiBIndex).toBeLessThan(sushiParagraphIndex)
       expect(sushiAIndex).toBeLessThan(dessertParagraphIndex)
       expect(sushiBIndex).toBeLessThan(dessertParagraphIndex)
-      // 디저트 사진은 초밥 사진들과 묶이지 않고 디저트 문단 뒤에 별도로 위치한다
-      expect(dessertMarkerIndex).toBeGreaterThan(dessertParagraphIndex)
+      // 디저트 사진은 초밥 사진들과 묶이지 않고 디저트 문단 자신의 바로 앞에 별도로 위치한다
+      expect(dessertMarkerIndex).toBeLessThan(dessertParagraphIndex)
     })
 
     it("그룹 상한을 넘는 같은 종류의 사진(4번째 초밥 사진)은 무관한 문단이 아니라 나머지 초밥 사진들과 같은 문단에 합류한다 (회귀 테스트)", async () => {
@@ -1384,15 +1380,18 @@ describe("llm", () => {
         ],
       })
 
-      const interiorParagraphIndex = result.indexOf("매장 내부는 아늑하고")
       const sushiParagraphIndex = result.indexOf("오늘은 초밥을 먹었는데")
-      const interiorSection = result.slice(interiorParagraphIndex, sushiParagraphIndex)
+      // "사진 → 설명" 순서라 초밥 사진들은 초밥 문단 자신의 "바로 앞"(직전 문단인 매장
+      // 내부 문단이 끝나는 지점)에 붙는다. 이 위치는 텍스트상 매장 내부 문단과 초밥
+      // 문단 사이에 있으므로, "매장 내부 문단 자체(청크)에는 사진이 붙지 않는다"는
+      // 원래 의도는 위치 슬라이스가 아니라 매장 내부 문단 청크 자체로 검증해야 한다.
+      const interiorChunk = result.split("\n\n").find((p) => p.startsWith("매장 내부는 아늑하고"))
 
-      // "매장 내부" 문단 구간에는 초밥 사진이 하나도 끼어들지 않는다
-      expect(interiorSection).not.toContain("[사진 원본")
-      // 네 장 모두 초밥 문단 뒤(=같은 자리)에 위치한다
+      // "매장 내부" 문단 자체에는 초밥 사진이 하나도 끼어들지 않는다
+      expect(interiorChunk).not.toContain("[사진 원본")
+      // 네 장 모두 초밥 문단 자신의 바로 앞(=같은 자리)에 위치한다
       ;["sushi1", "sushi2", "sushi3", "sushi4"].forEach((name) => {
-        expect(result.indexOf(`https://s3.example.com/${name}.jpg`)).toBeGreaterThan(sushiParagraphIndex)
+        expect(result.indexOf(`https://s3.example.com/${name}.jpg`)).toBeLessThan(sushiParagraphIndex)
       })
     })
 
@@ -1441,17 +1440,16 @@ describe("llm", () => {
         ],
       })
 
-      const interiorParagraphIndex = result.indexOf("분위기가 아늑하고")
       const sushiParagraphIndex = result.indexOf("오늘은 초밥을 먹었는데")
       const dessertParagraphIndex = result.indexOf("디저트도 나왔는데")
 
-      // 초밥 사진은 여전히 "초밥" 문단에 정확히 매칭돼야 한다(본문 전체가 제외되지 않았다는 증거)
+      // 초밥 사진은 여전히 "초밥" 문단 바로 앞("사진 → 설명")에 정확히 매칭돼야 한다(본문 전체가 제외되지 않았다는 증거)
       const sushiMarkerIndex = result.indexOf("https://s3.example.com/sushi.jpg")
-      expect(sushiMarkerIndex).toBeGreaterThan(sushiParagraphIndex)
+      expect(sushiMarkerIndex).toBeLessThan(sushiParagraphIndex)
       expect(sushiMarkerIndex).toBeLessThan(dessertParagraphIndex)
-      // "매장 내부" 문단 자체에는 여전히 사진이 끼어들지 않는다
-      const interiorSection = result.slice(interiorParagraphIndex, sushiParagraphIndex)
-      expect(interiorSection).not.toContain("[사진 원본")
+      // "매장 내부" 문단 자체(청크)에는 여전히 사진이 끼어들지 않는다
+      const interiorChunk = result.split("\n\n").find((p) => p.startsWith("분위기가 아늑하고"))
+      expect(interiorChunk).not.toContain("[사진 원본")
     })
 
     it("'메뉴판 ▼' 바로 뒤에 '매장 내부 ▼'가 이어져도, 메뉴판 사진이 매장 내부 잡담 문단에 붙지 않는다 (회귀 테스트)", async () => {
@@ -1532,8 +1530,8 @@ describe("llm", () => {
       const jeranParagraphIndex = result.indexOf("처음 시작은 상큼한")
       const jeranMarkerIndex = result.indexOf("https://s3.example.com/jeranjjim.jpg")
 
-      // 계란찜 사진은 매장 내부 구간 바로 다음이라도 실제 캡션이 겹치는 문단에 정확히 매칭된다
-      expect(jeranMarkerIndex).toBeGreaterThan(jeranParagraphIndex)
+      // 계란찜 사진은 매장 내부 구간 바로 다음이라도 실제 캡션이 겹치는 문단 바로 앞("사진 → 설명")에 정확히 매칭된다
+      expect(jeranMarkerIndex).toBeLessThan(jeranParagraphIndex)
     })
 
     it("'[참고링크]' 대괄호 없이 맨 URL만 남긴 지도 문단에는 사진이 끼어들지 않는다 (회귀 테스트)", async () => {
@@ -1609,10 +1607,11 @@ describe("llm", () => {
         })),
       })
 
-      const firstParagraphEnd = result.indexOf("첫 번째 이야기입니다")
       const lastParagraphStart = result.indexOf("오늘 방문은 여기까지이고")
 
-      const openingText = result.slice(0, firstParagraphEnd)
+      // "사진 → 설명" 순서라 첫 후보 문단의 마커는 그 문단 텍스트보다 앞(=인사말 문단
+      // 바로 뒤)에 위치하므로, 인사말 문단 자체(청크)만 따로 떼어 검사해야 한다.
+      const openingText = result.split("\n\n")[0]
       const closingText = result.slice(lastParagraphStart)
 
       expect(openingText).not.toContain("[사진 원본")
@@ -1643,11 +1642,12 @@ describe("llm", () => {
         })),
       })
 
-      const p1End = result.indexOf("P2 문단")
       const p10Start = result.indexOf("P10 문단")
       const closingStart = result.indexOf("마무리 인사")
 
-      const p1Section = result.slice(0, p1End) // 인사말 + P1
+      // "사진 → 설명" 순서라 P2용 마커(있다면)는 P1 문단이 끝나는 지점(P2 텍스트 바로
+      // 앞)에 붙으므로, P1 자체에 마커가 붙었는지는 P1 청크 하나만 떼어 검사해야 한다.
+      const p1Section = result.split("\n\n").find((p) => p.startsWith("P1 문단"))!
       const p10Section = result.slice(p10Start, closingStart) // P10만
 
       expect(p1Section).not.toContain("[사진 원본")
@@ -1686,10 +1686,10 @@ describe("llm", () => {
       const tunaMarkerIndex = result.indexOf("https://s3.example.com/tuna.jpg")
       const randomMarkerIndex = result.indexOf("https://s3.example.com/random.jpg")
 
-      // 초밥/참치 사진은 각자의 문단에 정확히 매칭된다
-      expect(sushiMarkerIndex).toBeGreaterThan(sushiParagraphIndex)
+      // 초밥/참치 사진은 각자의 문단 바로 앞("사진 → 설명")에 정확히 매칭된다
+      expect(sushiMarkerIndex).toBeLessThan(sushiParagraphIndex)
       expect(sushiMarkerIndex).toBeLessThan(tunaParagraphIndex)
-      expect(tunaMarkerIndex).toBeGreaterThan(tunaParagraphIndex)
+      expect(tunaMarkerIndex).toBeLessThan(tunaParagraphIndex)
       expect(tunaMarkerIndex).toBeLessThan(thirdParagraphIndex)
       // 매칭 실패한 사진은 초밥/참치 문단(이미 쓰인 자리)이 아니라 그 뒤 비어있는 문단에 위치
       expect(randomMarkerIndex).toBeGreaterThan(thirdParagraphIndex)
