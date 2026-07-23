@@ -121,33 +121,75 @@ export async function analyzeImagesBatch(
   return results
 }
 
+// 같은 음식을 부르는 서로 다른 한국어 표현이 텍스트 생성(LLM)과 사진 캡션(비전 모델)
+// 양쪽에서 각각 독립적으로 선택되면, 둘 다 자연스러운 한국어인데도 순수 부분문자열
+// 매칭으로는 절대 겹치지 않아 매칭이 실패한다. 실측 확인된 사고: 사시미 5점이 정확히
+// 찍힌 사진이 있는데도(파일명 KakaoTalk_..._02.jpg), 본문은 "사시미"라고 쓰고 비전
+// 캡션은 "회"(또는 "모둠회"처럼 "회"가 포함된 복합어)라고 써서 세 번의 재생성 모두
+// 이 사진이 전혀 매칭되지 않고 엉뚱한 사진이 대신 붙었다. 두 표현 다 BATCH_ANALYSIS_
+// PROMPT가 요구하는 "격식체 아닌 일상적인 한국어"에 해당해 어느 쪽이 나올지 예측할 수
+// 없으므로, 매칭 직전에 흔히 혼용되는 동의어 쌍을 같은 것으로 취급한다.
+const FOOD_SYNONYM_GROUPS: string[][] = [
+  ["사시미", "회"],
+  ["우니", "성게"],
+  ["단새우", "아마에비"],
+  ["참치", "마구로"],
+  ["초밥", "스시"],
+]
+
 // 캡션을 토큰(키워드) 배열로 쪼갠다. 쉼표/공백/구두점 기준으로 나누고, 조사 등 노이즈가
-// 섞이기 쉬운 1글자 토큰은 제외한다.
+// 섞이기 쉬운 1글자 토큰은 제외한다 — 단, "회"처럼 1글자지만 동의어 그룹에 등록된
+// 음식 키워드는 예외로 살려둔다(그대로 버려지면 애초에 매칭 대상에 오르지도 못한다).
+const SHORT_SYNONYM_TERMS = new Set(FOOD_SYNONYM_GROUPS.flat().filter((t) => t.length < 2))
 function tokenize(text: string): string[] {
   return text
     .split(/[,\s./\\!?~()[\]{}'"#>*\-–—:;·]+/)
     .map((t) => t.trim())
-    .filter((t) => t.length >= 2)
+    .filter((t) => t.length >= 2 || SHORT_SYNONYM_TERMS.has(t))
+}
+
+// 토큰(또는 문단 텍스트 조각) 안에 동의어 그룹의 어떤 표현이 부분 문자열로 들어있는지
+// 찾는다("모둠회"에는 "회"가, "생선사시미"에는 "사시미"가 포함되는 식). 찾으면 그
+// 그룹 전체를 반환한다.
+function findSynonymGroup(text: string): string[] | undefined {
+  return FOOD_SYNONYM_GROUPS.find((group) => group.some((term) => text.includes(term)))
+}
+
+// token이 paragraphText에 그대로 있는지뿐 아니라, token이나 paragraphText 어느 한쪽에
+// 동의어 그룹의 표현이 포함되어 있으면 다른 쪽에 그 그룹의 다른 표현이 있는지도 확인한다.
+function tokenMatchesText(token: string, text: string): boolean {
+  if (text.includes(token)) return true
+  const group = findSynonymGroup(token)
+  return group?.some((synonym) => text.includes(synonym)) ?? false
 }
 
 // 캡션 키워드 중 문단 텍스트에 실제로 등장하는 비율로 유사도를 계산한다(부분 문자열
 // 포함 여부 — 한국어는 조사가 바로 붙어 정확한 단어 경계 매칭이 어려우므로 포함 검사가
-// 오히려 더 안정적으로 동작한다).
+// 오히려 더 안정적으로 동작한다). 동의어 쌍(위 FOOD_SYNONYM_GROUPS)도 겹침으로 인정한다.
 function keywordOverlapScore(captionTokens: string[], paragraphText: string): number {
   if (captionTokens.length === 0) return 0
-  const hits = captionTokens.filter((token) => paragraphText.includes(token)).length
+  const hits = captionTokens.filter((token) => tokenMatchesText(token, paragraphText)).length
   return hits / captionTokens.length
 }
 
-// 두 캡션이 키워드를 하나라도 공유하는지 확인한다(groupSimilarImages와 동일한 기준).
+// 토큰에 동의어 그룹의 표현이 포함되어 있으면 그 그룹의 대표 표현으로 정규화한다(없으면
+// 그대로 반환). 두 토큰이 같은 그룹에 속하면 정규화 후 완전히 같은 문자열이 되어,
+// Set 기반 정확 일치 비교에서도 동의어로 인식된다.
+function canonicalizeToken(token: string): string {
+  const group = findSynonymGroup(token)
+  return group?.[0] ?? token
+}
+
+// 두 캡션이 키워드를 하나라도 공유하는지 확인한다(groupSimilarImages와 동일한 기준 —
+// tokenize 결과의 정확 일치이며, 동의어 쌍은 정규화 후 비교해 같은 표현으로 인정한다).
 // 그룹 상한(MAX_SIMILAR_GROUP_SIZE)에 걸려 같은 종류의 사진인데도 별도 그룹으로 남은
 // 경우, 이미 배치된 "형제" 그룹을 찾아 합류시키는 용도로 쓴다 — 실측 확인된 사고:
 // 초밥 사진이 4장인데 그룹 상한(3장) 때문에 하나가 남아 문단 매칭에도 실패하면,
 // 위치 기반 폴백이 전혀 무관한 문단(예: "매장 내부" 소개 문단)에 떨어뜨렸다.
 export function captionsShareKeyword(a: string, b: string): boolean {
-  const tokensA = new Set(tokenize(a))
+  const tokensA = new Set(tokenize(a).map(canonicalizeToken))
   if (tokensA.size === 0) return false
-  return tokenize(b).some((token) => tokensA.has(token))
+  return tokenize(b).some((token) => tokensA.has(canonicalizeToken(token)))
 }
 
 // 이미지 각각을 캡션 키워드가 가장 많이 겹치는 문단에 배정한다. 겹치는 키워드가
@@ -207,7 +249,7 @@ const MAX_SIMILAR_GROUP_SIZE = 3
 // 있었으므로(그래서 한때 완전히 1문단=1사진으로 하드 제한했었다), 이번엔 명시적으로
 // 캡션이 실제로 겹치는 경우로만 그룹을 만들고 크기도 상한을 둬 재발을 막는다.
 export function groupSimilarImages(captions: string[]): number[][] {
-  const tokenSets = captions.map((caption) => new Set(tokenize(caption)))
+  const tokenSets = captions.map((caption) => new Set(tokenize(caption).map(canonicalizeToken)))
   const assigned = new Array(captions.length).fill(false)
   const groups: number[][] = []
 
