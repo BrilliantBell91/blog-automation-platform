@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { generateNaverDraft, MODEL_FALLBACK_CHAIN } from "./llm"
+import { generateNaverDraft, MODEL_FALLBACK_CHAIN, redistributeForDensity } from "./llm"
 import type { Post } from "@/types"
 
 const generateContentMock = vi.fn()
@@ -1781,6 +1781,68 @@ describe("llm", () => {
       expect(saladMarkerIndex).toBeLessThan(saladParagraphIndex)
       expect(sashimiMarkerIndex).toBeLessThan(sashimiParagraphIndex)
       expect(saladMarkerIndex).toBeLessThan(sashimiMarkerIndex)
+    })
+
+    it("디저트는 뒤쪽 20% 풀이 아니라 진짜 마지막 후보 문단부터 채워, 디저트와 마지막 문단 사이에 빈 공백이 남지 않는다 (회귀 테스트)", async () => {
+      // 실측 확인된 사고: 예전에는 "뒤쪽 20% 풀 중 최소 사용" 방식(createLeastUsedPicker)이라
+      // 디저트 사진이 1장뿐이면 그 풀의 맨 앞(P9)에 배치되고 진짜 마지막 문단(P10)은
+      // 아무도 못 쓰는 빈 공백으로 남았다(비-디저트는 디저트보다 뒤에 못 오므로). 이제는
+      // 뒤에서부터 순서대로 채워 디저트가 항상 진짜 마지막 후보 문단에 온다.
+      process.env.LLM_API_KEY = "test-key"
+      const bodyParagraphs = Array.from(
+        { length: 10 },
+        (_, i) => `P${i + 1} 문단 내용입니다 여기에는 사진이 들어갈 만큼 충분히 긴 내용이 있습니다.`
+      ).join("\n\n")
+      generateContentMock.mockResolvedValueOnce({
+        text: `안녕하세요.\n\n${bodyParagraphs}\n\n마무리 인사.`,
+      })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [{ kind: "image", url: "https://s3.example.com/dessert.jpg", label: "아이스크림" }],
+      })
+
+      const p9Index = result.indexOf("P9 문단")
+      const p10Index = result.indexOf("P10 문단")
+      const dessertMarkerIndex = result.indexOf("https://s3.example.com/dessert.jpg")
+
+      // 디저트 마커는 P9 문단 뒤, P10 문단 바로 앞(="사진 → 설명")에 위치해야 한다
+      expect(dessertMarkerIndex).toBeGreaterThan(p9Index)
+      expect(dessertMarkerIndex).toBeLessThan(p10Index)
+    })
+  })
+
+  describe("redistributeForDensity", () => {
+    it("문단 사이 공백이 maxGap을 넘으면 사진이 몰린 문단에서 1장을 빌려와 공백을 메운다", () => {
+      // 사진 3장이 전부 문단1에 몰리고 문단2~6은 비어있는 상황(공백 5) - maxGap=2를
+      // 넘으므로 문단1에서 빌려와 재배치해야 한다.
+      const result = redistributeForDensity([1, 1, 1], [1, 2, 3, 4, 5, 6], 2)
+
+      const usage = new Map<number, number>()
+      result.forEach((idx) => usage.set(idx, (usage.get(idx) ?? 0) + 1))
+
+      // 문단1에 3장이 그대로 몰려있지 않고 일부가 다른 문단으로 옮겨졌다
+      expect(usage.get(1)).toBeLessThan(3)
+      // 총 사진 장수(3장)는 변하지 않는다 — 옮길 뿐 없애거나 만들어내지 않는다
+      expect(result).toHaveLength(3)
+    })
+
+    it("빌려올 여분이 없으면(모든 문단에 최대 1장) 공백을 그대로 둔다", () => {
+      // 문단1, 문단10에만 사진이 하나씩 있고 그 사이는 전부 비어있어도, 여분이 없으면
+      // (모두 정확히 1장) 억지로 사진을 만들어내지 않는다.
+      const result = redistributeForDensity(
+        [1, 10],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        2
+      )
+
+      expect(result).toEqual([1, 10])
+    })
+
+    it("공백이 maxGap 이하면 재배치하지 않는다", () => {
+      const result = redistributeForDensity([1, 4], [1, 2, 3, 4], 2)
+
+      expect(result).toEqual([1, 4])
     })
   })
 })

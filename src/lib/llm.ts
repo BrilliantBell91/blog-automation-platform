@@ -123,6 +123,8 @@ const CATEGORY_STYLE_NOTES: Record<
   > 주차 : X (가게 앞 길가에 주차 가능한듯)
   > 화장실 : 남여 공용, 내부에 위치
 - 본문은 "메뉴판 ▼" 소제목 → "매장 내부 ▼" 소제목(외관/인테리어 사진 자리) → 음식·음료 사진별 코멘트(사진 한 자리당 1~2문장, 최대 3문장) 순서로 전개하세요. 소제목은 그 줄에 짧게 쓰고 별도 문단으로 분리하세요.
+- "메뉴판 ▼" 섹션에서 메뉴판 사진이 실제로 첨부됐는지 여부는 당신이 알 수 없습니다 — **"메뉴판 사진은 못 찍었지만"/"메뉴판 사진이 없어서" 같은 문구는 절대 쓰지 마세요.** 시스템이 메뉴판 사진을 별도로 찾아 이 소제목 바로 아래에 자동으로 붙이는데, 본문에서 사진이 없다고 단정하면 실제로는 사진이 붙어 있어도 서로 모순되는 문장이 됩니다. 가격/구성 정보만 담백하게 서술하세요.
+- 사진과 직접 연결되지 않는 감상·추임새 문장(예: "진짜 맛있었다", "기대된다", "무시하면 안 된다")을 3문장 넘게 연달아 쓰지 마세요 — 그런 문장이 길게 이어지면 사진이 붙을 자리가 없어 본문에 사진 없는 텍스트만 이어지는 구간이 생깁니다. 문장마다 구체적인 음식/메뉴 이름을 자연스럽게 섞어 사진이 고르게 붙을 수 있게 하세요(단, 마지막 총평 문단은 예외입니다).
 - "매장 내부 ▼" 섹션은 오직 매장의 물리적 분위기(소음/음악/좌석/조명 등)만 1~2문장으로 묘사하세요(예: "생각보다 시끌벅적한 분위기다. 가요도 나오고 북적북적한 느낌"). **"당황했다/당황쓰", "비추", "~하기엔 딱이다/최고다", "~가기엔 좋다/별로다" 같이 방문 목적·추천 여부·총평 뉘앙스가 조금이라도 섞인 문장은 이 섹션에 절대 쓰지 마세요.** 그런 문장이 떠오르면 이 섹션에는 쓰지 말고 전부 빼서 글 마지막 총평 문단으로 옮기고, 이 섹션은 순수 묘사 1~2문장으로만 끝내세요.
 - 마무리는 반드시 이 순서를 지키세요: (1) 총평 2~4문장 → (2) "위치는 요기 ▼" 한 줄 다음에 참고링크(지도) 마커를 그대로 남기기(위 "위치 링크 유지 규칙" 참고) → (3) "👋그럼 다들 [맛있는/즐거운/평화로운] 하루 보내세요.👋" 같은 짧은 인사. 지도가 총평보다 먼저 오면 안 됩니다. "공감/댓글 부탁드립니다" 같은 CTA 문구는 최근 글에는 없으니 쓰지 마세요.
 - 문장 종결은 "~다."뿐 아니라 "~음."(명사형 캐주얼 종결, 예: "고기가 엄청 부드러움."), "~인 듯/듯."(추측형)을 자주 섞고, 가끔 "..ㅋㅋㅋ"로 얼버무리듯 끝내거나 "~당"(애교체, 예: "깜빡했당🙄")을 쓰세요.
@@ -605,6 +607,47 @@ function createSpacedGapPicker(pool: number[]) {
       return bestPos === -1 ? pool[0] : pool[bestPos]
     },
   }
+}
+
+// 사진이 배정된 그룹을 문단 단위로만 다루면, "비슷한 사진끼리 묶어서 배치"(그룹화)
+// 요청과 "본문 전체에 사진을 고르게 흩어달라"는 요청이 서로 충돌한다 — 그룹화가 잘 된
+// 구간엔 사진이 여러 장 뭉치고, 정작 다른 구간은 여러 문단이 연달아 사진 없이 텍스트만
+// 이어지는 사고로 이어졌다(사용자 신고: "중간/후반부 글 비중이 너무 높다"). 그룹 배정이
+// 끝난 뒤 멤버(사진) 단위로 펼쳐서, 사진이 2장 이상 몰린 문단에서 1장씩 "빌려와" 사진이
+// maxGap개 넘게 연속으로 빠진 구간에 재배치한다 — 그룹화 자체는 대부분 유지되고(각
+// 그룹에서 1장만 떨어져 나감), 극단적으로 긴 공백만 완화된다. 빌려올 여분이 없으면
+// (모든 문단이 정확히 1장씩이거나 0장) 그 공백은 그대로 둔다 — 없는 사진을 억지로
+// 만들어내지는 않는다.
+export function redistributeForDensity(
+  memberParagraphIndex: number[],
+  orderedCandidates: number[],
+  maxGap: number
+): number[] {
+  const result = [...memberParagraphIndex]
+  const countAt = new Map<number, number>()
+  result.forEach((idx) => countAt.set(idx, (countAt.get(idx) ?? 0) + 1))
+
+  let gapRun = 0
+  for (const candidateIndex of orderedCandidates) {
+    const isUsed = (countAt.get(candidateIndex) ?? 0) > 0
+    if (isUsed) {
+      gapRun = 0
+      continue
+    }
+    gapRun++
+    if (gapRun <= maxGap) continue
+
+    const donorMemberIndex = result.findIndex((idx) => (countAt.get(idx) ?? 0) > 1)
+    if (donorMemberIndex === -1) continue // 빌려올 여분이 없으면 공백을 그대로 둔다.
+
+    const donorParagraph = result[donorMemberIndex]
+    countAt.set(donorParagraph, countAt.get(donorParagraph)! - 1)
+    result[donorMemberIndex] = candidateIndex
+    countAt.set(candidateIndex, (countAt.get(candidateIndex) ?? 0) + 1)
+    gapRun = 0
+  }
+
+  return result
 }
 
 // Notion 제목에 흔히 붙는 "[테스트]", "[협찬]" 같은 대괄호 접두사는 이미지 검색 관련성을
@@ -1169,13 +1212,16 @@ async function insertImages(
 
   if (dessertEntries.length > 0) {
     const basePool = candidates.filter((index) => !reservedByLeadSlots.has(index))
-    const tailPoolSize = Math.max(dessertEntries.length, Math.ceil(candidates.length * 0.2), 1)
-    const dessertPool = basePool.slice(-Math.min(tailPoolSize, basePool.length))
-    const dessertPicker = createLeastUsedPicker(dessertPool.length > 0 ? dessertPool : basePool)
-    dessertEntries.forEach(({ attachment }) => {
-      const paragraphIndex = dessertPicker.pick()
+    // 디저트는 반드시 "진짜 마지막 후보 문단"부터 뒤에서 채운다. 예전에는 "뒤쪽 20%
+    // 풀 중 최소 사용" 방식(createLeastUsedPicker)이라 사진이 1장뿐이면 그 풀의 맨
+    // 앞(=진짜 마지막 문단보다 앞)에 배치됐는데, 비-디저트 사진은 이 지점 이전으로만
+    // 제한되므로 디저트와 진짜 마지막 문단 사이에 아무도 못 쓰는 빈 구간이 남아
+    // 통째로 사진 없이 텍스트만 이어지는 사고로 이어졌다(사용자 신고: "후반부 글
+    // 밀도가 너무 높다"). 뒤에서부터 순서대로 채우면 이 빈 구간이 생기지 않는다.
+    dessertEntries.forEach(({ attachment }, i) => {
+      const paragraphIndex = basePool[basePool.length - 1 - i] ?? basePool[basePool.length - 1]
+      if (paragraphIndex === undefined) return
       prependImageMarker(paragraphIndex, attachment.url)
-      dessertPicker.markUsed(paragraphIndex)
       picker.markUsed(paragraphIndex)
       // 이후 nonDessert 배치가 이 문단을 다시 쓰지 않도록 예약 목록에 합류시킨다.
       reservedByLeadSlots.add(paragraphIndex)
@@ -1276,14 +1322,27 @@ async function insertImages(
       middlePicker.markUsed(paragraphIndex)
     })
 
+    // 그룹 단위 배정을 멤버(사진) 단위 배열로 펼친 뒤, 문단 사이 공백이 너무 길어지는
+    // 구간이 있으면 사진이 몰린 문단에서 빌려와 재배치한다(위 redistributeForDensity 참고).
+    const memberParagraphIndex = new Array<number>(nonDessertEntries.length)
     groupCaptions.forEach((group, g) => {
       const paragraphIndex = decidedParagraphOf[g]!
-      middlePicker.markUsed(paragraphIndex)
-      picker.markUsed(paragraphIndex)
       group.members.forEach((memberIndex) => {
-        // "사진 → 설명" 구조(사용자 요청)로, 사진 마커를 문단 텍스트 뒤가 아니라 앞에 붙인다.
-        prependImageMarker(paragraphIndex, nonDessertEntries[memberIndex].attachment.url)
+        memberParagraphIndex[memberIndex] = paragraphIndex
       })
+    })
+
+    const MAX_CONSECUTIVE_GAP = 2
+    const balancedParagraphIndex = redistributeForDensity(
+      memberParagraphIndex,
+      middleCandidates.length > 0 ? middleCandidates : candidates,
+      MAX_CONSECUTIVE_GAP
+    )
+
+    balancedParagraphIndex.forEach((paragraphIndex, memberIndex) => {
+      picker.markUsed(paragraphIndex)
+      // "사진 → 설명" 구조(사용자 요청)로, 사진 마커를 문단 텍스트 뒤가 아니라 앞에 붙인다.
+      prependImageMarker(paragraphIndex, nonDessertEntries[memberIndex].attachment.url)
     })
   }
 
