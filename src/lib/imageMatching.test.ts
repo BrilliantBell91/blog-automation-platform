@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { analyzeImagesBatch, matchImagesToParagraphs } from "./imageMatching"
+import {
+  analyzeImagesBatch,
+  matchImagesToParagraphs,
+  matchImagesMonotonicByStage,
+} from "./imageMatching"
 
 const { runVisionPromptBatchMock } = vi.hoisted(() => ({
   runVisionPromptBatchMock: vi.fn(),
@@ -21,7 +25,13 @@ describe("imageMatching", () => {
       ])
 
       expect(result).toEqual([
-        { caption: "가게 외관 사진", isExterior: true, isMenu: false, isInterior: false },
+        {
+          caption: "가게 외관 사진",
+          isExterior: true,
+          isMenu: false,
+          isInterior: false,
+          courseStage: -1,
+        },
       ])
       expect(runVisionPromptBatchMock).not.toHaveBeenCalled()
     })
@@ -32,7 +42,7 @@ describe("imageMatching", () => {
       ])
 
       expect(result).toEqual([
-        { caption: "메뉴판 사진", isExterior: false, isMenu: true, isInterior: false },
+        { caption: "메뉴판 사진", isExterior: false, isMenu: true, isInterior: false, courseStage: -1 },
       ])
       expect(runVisionPromptBatchMock).not.toHaveBeenCalled()
     })
@@ -48,7 +58,13 @@ describe("imageMatching", () => {
       ])
 
       expect(result).toEqual([
-        { caption: "우니, 초밥, 클로즈업", isExterior: false, isMenu: false, isInterior: false },
+        {
+          caption: "우니, 초밥, 클로즈업",
+          isExterior: false,
+          isMenu: false,
+          isInterior: false,
+          courseStage: -1,
+        },
       ])
     })
 
@@ -63,7 +79,7 @@ describe("imageMatching", () => {
       ])
 
       expect(result).toEqual([
-        { caption: "메뉴판, 가격표", isExterior: false, isMenu: true, isInterior: false },
+        { caption: "메뉴판, 가격표", isExterior: false, isMenu: true, isInterior: false, courseStage: -1 },
       ])
     })
 
@@ -78,8 +94,50 @@ describe("imageMatching", () => {
       ])
 
       expect(result).toEqual([
-        { caption: "테이블, 좌석", isExterior: false, isMenu: false, isInterior: true },
+        { caption: "테이블, 좌석", isExterior: false, isMenu: false, isInterior: true, courseStage: -1 },
       ])
+    })
+
+    it("비전 배치 응답에서 코스단계(다섯 번째 필드)도 함께 파싱한다", async () => {
+      runVisionPromptBatchMock.mockResolvedValueOnce({
+        successIndexes: [0],
+        text: "1) 사시미, 광어 | 아니오 | 아니오 | 아니오 | 회",
+      })
+
+      const result = await analyzeImagesBatch("test-key", [
+        { url: "https://example.com/1.jpg", existingLabel: "20180206_195520.jpg" },
+      ])
+
+      expect(result).toEqual([
+        { caption: "사시미, 광어", isExterior: false, isMenu: false, isInterior: false, courseStage: 1 },
+      ])
+    })
+
+    it("코스단계 단어가 지시한 6개 중 하나가 아니면 알수없음(-1)으로 안전 폴백한다", async () => {
+      runVisionPromptBatchMock.mockResolvedValueOnce({
+        successIndexes: [0],
+        text: "1) 알수없는사진 | 아니오 | 아니오 | 아니오 | 이상한단어",
+      })
+
+      const result = await analyzeImagesBatch("test-key", [
+        { url: "https://example.com/1.jpg", existingLabel: "20180206_195520.jpg" },
+      ])
+
+      expect(result[0].courseStage).toBe(-1)
+    })
+
+    it("캡션이 디저트 패턴에 해당하면 비전이 다른 코스단계로 잘못 분류해도 강제로 디저트(4)로 취급한다 (안전망)", async () => {
+      runVisionPromptBatchMock.mockResolvedValueOnce({
+        successIndexes: [0],
+        // 비전이 "요리"(3)로 잘못 분류해도 캡션에 "아이스크림"이 있으면 courseStage를 4로 강제한다.
+        text: "1) 아이스크림, 그릇 | 아니오 | 아니오 | 아니오 | 요리",
+      })
+
+      const result = await analyzeImagesBatch("test-key", [
+        { url: "https://example.com/1.jpg", existingLabel: "20180206_195520.jpg" },
+      ])
+
+      expect(result[0].courseStage).toBe(4)
     })
 
     it("4번째 필드(매장 내부 여부)가 없는 구 3필드 형식도 하위 호환으로 파싱하고 isInterior는 false로 남긴다", async () => {
@@ -93,7 +151,7 @@ describe("imageMatching", () => {
       ])
 
       expect(result).toEqual([
-        { caption: "우니, 초밥", isExterior: false, isMenu: false, isInterior: false },
+        { caption: "우니, 초밥", isExterior: false, isMenu: false, isInterior: false, courseStage: -1 },
       ])
     })
 
@@ -103,7 +161,13 @@ describe("imageMatching", () => {
       ])
 
       expect(result).toEqual([
-        { caption: "매장 내부 인테리어", isExterior: false, isMenu: false, isInterior: true },
+        {
+          caption: "매장 내부 인테리어",
+          isExterior: false,
+          isMenu: false,
+          isInterior: true,
+          courseStage: -1,
+        },
       ])
       expect(runVisionPromptBatchMock).not.toHaveBeenCalled()
     })
@@ -123,7 +187,7 @@ describe("imageMatching", () => {
 
       expect(runVisionPromptBatchMock).toHaveBeenCalledTimes(1)
       expect(result).toEqual([
-        { caption: "가게 외관, 간판", isExterior: true, isMenu: false, isInterior: false },
+        { caption: "가게 외관, 간판", isExterior: true, isMenu: false, isInterior: false, courseStage: -1 },
       ])
     })
 
@@ -143,7 +207,13 @@ describe("imageMatching", () => {
 
       expect(runVisionPromptBatchMock).toHaveBeenCalledTimes(2)
       expect(result).toHaveLength(6)
-      expect(result[5]).toEqual({ caption: "f", isExterior: true, isMenu: false, isInterior: false })
+      expect(result[5]).toEqual({
+        caption: "f",
+        isExterior: true,
+        isMenu: false,
+        isInterior: false,
+        courseStage: -1,
+      })
     })
 
     it("배치 호출이 완전히 실패해도(text: null) 전체를 버리지 않고 빈 캡션으로 폴백한다", async () => {
@@ -155,8 +225,8 @@ describe("imageMatching", () => {
       ])
 
       expect(result).toEqual([
-        { caption: "", isExterior: false, isMenu: false, isInterior: false },
-        { caption: "", isExterior: false, isMenu: false, isInterior: false },
+        { caption: "", isExterior: false, isMenu: false, isInterior: false, courseStage: -1 },
+        { caption: "", isExterior: false, isMenu: false, isInterior: false, courseStage: -1 },
       ])
     })
 
@@ -177,8 +247,15 @@ describe("imageMatching", () => {
         isExterior: false,
         isMenu: false,
         isInterior: false,
+        courseStage: -1,
       })
-      expect(result[1]).toEqual({ caption: "", isExterior: false, isMenu: false, isInterior: false })
+      expect(result[1]).toEqual({
+        caption: "",
+        isExterior: false,
+        isMenu: false,
+        isInterior: false,
+        courseStage: -1,
+      })
     })
   })
 
@@ -277,6 +354,78 @@ describe("imageMatching", () => {
 
       expect(result[1]).toBe(1) // 계란찜 사진이 유일한 후보 문단을 차지
       expect(result[0]).toBeNull() // 샐러드 사진은 밀려나 매칭 실패로 폴백에 넘어감
+    })
+  })
+
+  describe("matchImagesMonotonicByStage", () => {
+    it("노션에 사진이 무작위 순서로 첨부돼도 courseStage 순서(전채→회→초밥)대로 문단에 배정한다 (회귀 테스트)", () => {
+      // 사용자 신고: 오마카세 코스 순서(전채→회→초밥→디저트)와 무관하게 사진이
+      // 배치되던 문제. 첨부 순서는 초밥(2)→전채(0)→회(1)지만, 코스 순서대로
+      // 정렬되어 문단도 앞→뒤 순서로 배정돼야 한다.
+      const result = matchImagesMonotonicByStage(
+        [
+          { caption: "초밥 클로즈업", courseStage: 2 },
+          { caption: "샐러드", courseStage: 0 },
+          { caption: "사시미", courseStage: 1 },
+        ],
+        [
+          { index: 10, text: "전채 문단" },
+          { index: 11, text: "회 문단" },
+          { index: 12, text: "초밥 문단" },
+        ]
+      )
+
+      // 전채(0)가 가장 이른 문단, 회(1)가 그다음, 초밥(2)이 가장 늦은 문단이어야 한다.
+      expect(result[1]).toBeLessThan(result[2]!) // 샐러드(전채) < 사시미(회)
+      expect(result[2]).toBeLessThan(result[0]!) // 사시미(회) < 초밥
+    })
+
+    it("키워드가 겹치면 코스 순서 안에서도 실제로 맞는 문단에 배정한다", () => {
+      const result = matchImagesMonotonicByStage(
+        [
+          { caption: "계란찜", courseStage: 0 },
+          { caption: "참치뱃살", courseStage: 1 },
+        ],
+        [
+          { index: 0, text: "처음 시작은 상큼한 샐러드랑 계란찜이 나온다" },
+          { index: 1, text: "이 가격에 참치뱃살이 나오다니 혜자다" },
+        ]
+      )
+
+      expect(result).toEqual([0, 1])
+    })
+
+    it("키워드도 안 겹치고 코스단계도 모르면(UNKNOWN) 강제 배치하지 않고 null을 반환한다 (회귀 테스트)", () => {
+      // 실측 확인된 사고: 순서 신호가 전혀 없는 사진을 "포인터 바로 다음 후보"에
+      // 무조건 밀어넣으면, 이미 사진이 배치된 문단 바로 뒤(예: "매장 내부" 잡담
+      // 문단 다음)처럼 부적절한 자리에 몰렸다. 신호가 없으면 호출부의 위치 기반
+      // 분산 폴백에 맡기도록 null을 반환해야 한다.
+      const result = matchImagesMonotonicByStage(
+        [{ caption: "전혀 상관없는 잡담", courseStage: -1 }],
+        [
+          { index: 5, text: "매장 분위기 관련 문단" },
+          { index: 6, text: "메뉴 관련 문단" },
+        ]
+      )
+
+      expect(result).toEqual([null])
+    })
+
+    it("키워드는 안 겹쳐도 코스단계를 알면(UNKNOWN 아님) 순서 보존을 위해 강제 배치한다", () => {
+      const result = matchImagesMonotonicByStage(
+        [
+          { caption: "무관한캡션", courseStage: 3 },
+          { caption: "역시무관", courseStage: 0 },
+        ],
+        [
+          { index: 0, text: "첫 번째 문단" },
+          { index: 1, text: "두 번째 문단" },
+        ]
+      )
+
+      // 둘 다 키워드는 안 겹치지만 courseStage가 있으므로, 전채(0)가 요리(3)보다
+      // 먼저(더 이른 문단) 배정돼야 한다.
+      expect(result[1]).toBeLessThan(result[0]!)
     })
   })
 })

@@ -671,10 +671,12 @@ describe("llm", () => {
       expect(result).toContain(
         "[사진 원본 - 위치 유지, 절대 수정/삭제/설명 창작 금지: https://example.com/4.jpg]"
       )
-      // 텍스트 생성 1회만 — 캡션 배치 분석은 이미지 다운로드(fetch)가 테스트 환경에서
-      // 항상 실패하도록 mock되어 있어(fetchMock 기본값) 비전 모델 호출까지 가지 않고
-      // 조용히 빈 캡션으로 폴백한다(생성 자체가 실패한 게 아니라 안전하게 건너뛴 것).
-      expect(generateContentMock).toHaveBeenCalledTimes(1)
+      // 텍스트 생성 1회 + 이미지-문단 LLM 매칭 시도 1회. 캡션 배치 분석은 이미지
+      // 다운로드(fetch)가 테스트 환경에서 항상 실패하도록 mock되어 있어(fetchMock
+      // 기본값) 비전 모델 호출까지 가지 않고 조용히 빈 캡션으로 폴백하지만, 첨부
+      // 사진이 있으면(nonDessertEntries.length > 0) 캡션이 비어 있어도 매칭 시도
+      // 자체는 항상 1회 발생한다(응답이 없으면 결정론적 폴백으로 넘어감).
+      expect(generateContentMock).toHaveBeenCalledTimes(2)
       // 부족분 채우기 검색은 없지만, 외관 사진이 없어 대표 사진 검색은 한 번 시도한다
       expect(searchRealImagesMock).toHaveBeenCalledWith("테스트 포스트 외관", 5)
     })
@@ -1693,6 +1695,92 @@ describe("llm", () => {
       expect(tunaMarkerIndex).toBeLessThan(thirdParagraphIndex)
       // 매칭 실패한 사진은 초밥/참치 문단(이미 쓰인 자리)이 아니라 그 뒤 비어있는 문단에 위치
       expect(randomMarkerIndex).toBeGreaterThan(thirdParagraphIndex)
+    })
+
+    it("노션에 사진이 무작위 순서로 첨부돼도 디저트는 항상 다른 모든 음식 사진보다 뒤에 배치된다 (회귀 테스트)", async () => {
+      // 사용자 신고: 오마카세 코스 특성상 아이스크림(디저트)이 마지막에 나와야
+      // 자연스러운데, 노션에 사진을 순서 없이 첨부하면 디저트 사진 뒤에 다른 음식
+      // (예: 새우볶음) 사진이 나오는 사고가 있었다. 비전 분석이 courseStage를
+      // 정확히 분류하면(코스 순서 신호), 디저트 사진이 다른 모든 비-디저트 사진보다
+      // 항상 뒤(더 늦은 문단)에 위치해야 한다.
+      process.env.LLM_API_KEY = "test-key"
+      fetchMock.mockResolvedValue({
+        ok: true,
+        headers: { get: () => "image/jpeg" },
+        arrayBuffer: async () => new ArrayBuffer(4),
+      })
+      generateContentMock
+        .mockResolvedValueOnce({
+          text: "안녕하세요.\n\n처음 시작은 상큼한 샐러드가 나온다 정말 신선했다.\n\n이어서 신선한 사시미가 나왔는데 훌륭했다.\n\n그리고 다양한 초밥이 이어졌다.\n\n마지막 코스까지 알찼다.\n\n마무리 인사.",
+        })
+        // 비전 배치 분석: 노션 첨부 순서는 디저트→전채→회→초밥이지만, 코스단계는
+        // 각각 디저트/전채/회/초밥으로 정확히 분류된다.
+        .mockResolvedValueOnce({
+          text: "1) 아이스크림, 그릇 | 아니오 | 아니오 | 아니오 | 디저트\n2) 샐러드, 야채 | 아니오 | 아니오 | 아니오 | 전채\n3) 사시미, 광어 | 아니오 | 아니오 | 아니오 | 회\n4) 초밥, 클로즈업 | 아니오 | 아니오 | 아니오 | 초밥",
+        })
+        // 이미지-문단 LLM 매칭은 실패시켜(파싱 불가 응답) 결정론적 폴백
+        // (matchImagesMonotonicByStage)이 순서를 보장하는지 검증한다.
+        .mockResolvedValueOnce({ text: "매칭할 수 없습니다." })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/dessert.jpg" },
+          { kind: "image", url: "https://s3.example.com/appetizer.jpg" },
+          { kind: "image", url: "https://s3.example.com/sashimi.jpg" },
+          { kind: "image", url: "https://s3.example.com/sushi.jpg" },
+        ],
+      })
+
+      const dessertMarkerIndex = result.indexOf("https://s3.example.com/dessert.jpg")
+      const appetizerMarkerIndex = result.indexOf("https://s3.example.com/appetizer.jpg")
+      const sashimiMarkerIndex = result.indexOf("https://s3.example.com/sashimi.jpg")
+      const sushiMarkerIndex = result.indexOf("https://s3.example.com/sushi.jpg")
+
+      // 전부 포함 불변식: 네 장 모두 실제로 배치된다
+      expect(dessertMarkerIndex).toBeGreaterThan(-1)
+      expect(appetizerMarkerIndex).toBeGreaterThan(-1)
+      expect(sashimiMarkerIndex).toBeGreaterThan(-1)
+      expect(sushiMarkerIndex).toBeGreaterThan(-1)
+
+      // 코스 순서(전채→회→초밥)가 문단 순서와 함께 보존된다
+      expect(appetizerMarkerIndex).toBeLessThan(sashimiMarkerIndex)
+      expect(sashimiMarkerIndex).toBeLessThan(sushiMarkerIndex)
+
+      // 디저트는 다른 모든 음식 사진보다 항상 뒤에 위치한다
+      expect(dessertMarkerIndex).toBeGreaterThan(appetizerMarkerIndex)
+      expect(dessertMarkerIndex).toBeGreaterThan(sashimiMarkerIndex)
+      expect(dessertMarkerIndex).toBeGreaterThan(sushiMarkerIndex)
+    })
+
+    it("이미지-문단 LLM 매칭이 코스 순서를 지키는 유효한 응답을 반환하면 그 결과를 그대로 신뢰한다", async () => {
+      process.env.LLM_API_KEY = "test-key"
+      generateContentMock
+        .mockResolvedValueOnce({
+          text: "안녕하세요.\n\n처음에는 상큼한 샐러드가 나왔다 아주 신선했다.\n\n이어서 두툼한 사시미도 나왔는데 정말 훌륭했다.\n\n마무리 인사.",
+        })
+        // LLM 매칭 응답: 샐러드 사진(I1)을 P1, 사시미 사진(I2)을 P2에 배정(유효한 코스 순서)
+        .mockResolvedValueOnce({
+          text: '[{"image":1,"paragraph":1},{"image":2,"paragraph":2}]',
+        })
+
+      const { content: result } = await generateNaverDraft({
+        ...mockPost,
+        contentAttachments: [
+          { kind: "image", url: "https://s3.example.com/salad.jpg", label: "샐러드 접시" },
+          { kind: "image", url: "https://s3.example.com/sashimi.jpg", label: "사시미 모둠" },
+        ],
+      })
+
+      const saladParagraphIndex = result.indexOf("샐러드가 나왔다")
+      const sashimiParagraphIndex = result.indexOf("사시미도 나왔는데")
+      const saladMarkerIndex = result.indexOf("https://s3.example.com/salad.jpg")
+      const sashimiMarkerIndex = result.indexOf("https://s3.example.com/sashimi.jpg")
+
+      // LLM 매칭 응답이 지시한 대로("사진 → 설명" 순서로) 각자의 문단 바로 앞에 배치된다
+      expect(saladMarkerIndex).toBeLessThan(saladParagraphIndex)
+      expect(sashimiMarkerIndex).toBeLessThan(sashimiParagraphIndex)
+      expect(saladMarkerIndex).toBeLessThan(sashimiMarkerIndex)
     })
   })
 })

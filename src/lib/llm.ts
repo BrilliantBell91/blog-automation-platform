@@ -8,10 +8,13 @@ import {
 import { searchRealImages, searchGoogleImages } from "./imageSearch"
 import {
   analyzeImagesBatch,
-  matchImagesToParagraphs,
+  matchImagesMonotonicByStage,
   groupSimilarImages,
   captionsShareKeyword,
+  DESSERT_CAPTION_PATTERN,
+  COURSE_STAGE_DESSERT,
 } from "./imageMatching"
+import { matchImagesToParagraphsViaLlm, respectsCourseOrder } from "./imageMatchLlm"
 import { searchNaverPlace } from "./naverLocalSearch"
 import { extractNaverPlaceId, fetchNaverPlaceDetail, fetchNaverPlacePhotos } from "./naverPlaceDetail"
 import { inferFacilityFromReviews } from "./naverReviewSearch"
@@ -910,13 +913,6 @@ interface InsertImagesResult {
   leadImageUrl?: string
 }
 
-// 아이스크림 등 디저트는 오마카세 코스 특성상 항상 마지막 순서에 나와야 자연스러운데,
-// 노션에는 사진이 순서 없이 아무렇게나 첨부되고 캡션 키워드 매칭도 위치를 고려하지
-// 않아 중간 문단에 뜬금없이 디저트 사진이 배치되는 사고가 실측 확인됐다. 캡션에 이
-// 패턴이 매치되면 일반 그룹 매칭에서 미리 빼내 뒤쪽 구간 전용으로 처리한다(아래
-// insertImages의 dessertEntries 참고).
-const DESSERT_CAPTION_PATTERN = /아이스크림|디저트|셔벗|빙수|파르페|마카롱|후식/
-
 // 사용자 첨부 사진과 부족분(실사 검색/AI 생성)을 모두 서술형 문단 사이사이에 프로그래밍적으로
 // 끼워넣는다. 첨부 사진의 URL은 LLM에게 애초에 주지 않으므로(위 formatImageAttachmentHints
 // 참고) 여기서 코드가 직접 삽입해야 실제로 첨부한 사진이 결과에 반드시 포함된다.
@@ -1153,23 +1149,29 @@ async function insertImages(
     )
 
   // 디저트로 판별된 사진은 일반 그룹 매칭에서 미리 빼내, 후보 문단 중 뒤쪽(마무리 직전)
-  // 구간에서만 고르도록 별도 처리한다(위 DESSERT_CAPTION_PATTERN 설명 참고).
-  const dessertEntries = matchableEntries.filter(({ analysis }) =>
-    DESSERT_CAPTION_PATTERN.test(analysis.caption)
-  )
-  const nonDessertEntries = matchableEntries.filter(
-    ({ analysis }) => !DESSERT_CAPTION_PATTERN.test(analysis.caption)
-  )
+  // 구간에서만 고르도록 별도 처리한다(위 DESSERT_CAPTION_PATTERN 설명 참고). courseStage가
+  // 이미 비전 단계에서 디저트로 강제 동기화되어 있으므로(imageMatching.ts의 analyzeImagesBatch
+  // 참고) courseStage 검사만으로 충분하지만, 안전망으로 캡션 패턴도 함께 확인한다.
+  const isDessertEntry = ({ analysis }: (typeof matchableEntries)[number]) =>
+    analysis.courseStage === COURSE_STAGE_DESSERT || DESSERT_CAPTION_PATTERN.test(analysis.caption)
+  const dessertEntries = matchableEntries.filter(isDessertEntry)
+  const nonDessertEntries = matchableEntries.filter((entry) => !isDessertEntry(entry))
 
   const reservedByLeadSlots = new Set(
     [menuParagraphIndex, interiorParagraphIndex].filter((v): v is number => v !== undefined)
   )
 
+  // 디저트가 차지한 가장 이른 후보 문단. 비-디저트 사진은 이 지점 이전으로만 배치를
+  // 제한해, "아이스크림 뒤에 다른 음식 사진이 옴" 사고를 구조적으로 차단한다(느슨한
+  // "뒤쪽 20% 안에서 고른다"는 예전 방식은 그 구간 안에서도 비-디저트가 디저트보다
+  // 뒤에 배치될 수 있어 재발했다).
+  let earliestDessertCandidateIndex: number | undefined
+
   if (dessertEntries.length > 0) {
     const basePool = candidates.filter((index) => !reservedByLeadSlots.has(index))
-    const tailPoolSize = Math.max(1, Math.ceil(candidates.length * 0.2))
-    const tailPool = basePool.slice(-tailPoolSize)
-    const dessertPicker = createLeastUsedPicker(tailPool.length > 0 ? tailPool : basePool)
+    const tailPoolSize = Math.max(dessertEntries.length, Math.ceil(candidates.length * 0.2), 1)
+    const dessertPool = basePool.slice(-Math.min(tailPoolSize, basePool.length))
+    const dessertPicker = createLeastUsedPicker(dessertPool.length > 0 ? dessertPool : basePool)
     dessertEntries.forEach(({ attachment }) => {
       const paragraphIndex = dessertPicker.pick()
       prependImageMarker(paragraphIndex, attachment.url)
@@ -1177,11 +1179,19 @@ async function insertImages(
       picker.markUsed(paragraphIndex)
       // 이후 nonDessert 배치가 이 문단을 다시 쓰지 않도록 예약 목록에 합류시킨다.
       reservedByLeadSlots.add(paragraphIndex)
+      earliestDessertCandidateIndex =
+        earliestDessertCandidateIndex === undefined
+          ? paragraphIndex
+          : Math.min(earliestDessertCandidateIndex, paragraphIndex)
     })
   }
 
   if (nonDessertEntries.length > 0) {
-    const basePool = candidates.filter((index) => !reservedByLeadSlots.has(index))
+    const basePool = candidates.filter(
+      (index) =>
+        !reservedByLeadSlots.has(index) &&
+        (earliestDessertCandidateIndex === undefined || index < earliestDessertCandidateIndex)
+    )
     const middleCandidates = trimHeadAndTail(basePool)
     const candidateParagraphs = middleCandidates.map((index) => ({ index, text: paragraphs[index] }))
 
@@ -1197,24 +1207,50 @@ async function insertImages(
             return [entry.analysis.caption, entry.anchor].filter(Boolean).join(", ")
           })
           .join(", "),
+        // 그룹 대표 코스단계: 같은 그룹은 캡션 키워드가 겹쳐 묶인 것이라 대개 같은
+        // 코스이므로, 첫 멤버의 분류를 그룹 전체 대표값으로 쓴다.
+        courseStage: nonDessertEntries[group[0]].analysis.courseStage,
       })
     )
-    const groupMatchedIndexes = matchImagesToParagraphs(
-      groupCaptions.map(({ caption }) => ({ caption })),
-      candidateParagraphs
-    )
+
+    // 1차: 본문을 생성한 LLM에게 문단 목록 + 사진 캡션을 함께 보여주고 의미 기반
+    // 매칭을 요청한다(실측 확인된 사고: 순수 키워드 겹침만으로는 "샐러드"/"계란찜"
+    // 같은 캡션이 표현 차이로 본문과 안 겹쳐 위치 폴백으로 흩어짐). 응답이 없거나,
+    // 일부만 배정됐거나, 코스 순서(전채→회→초밥→요리)를 어기면 전부 버리고 아래
+    // 결정론적 폴백만 신뢰한다 — 부분적으로만 신뢰하면 순서 보장이 깨질 수 있다.
+    let groupMatchedIndexes: (number | null)[] | null = null
+    try {
+      const llmResult = await matchImagesToParagraphsViaLlm(
+        apiKey,
+        groupCaptions.map(({ caption, courseStage }) => ({ caption, courseStage })),
+        candidateParagraphs
+      )
+      if (llmResult && llmResult.every((v) => v !== null) && respectsCourseOrder(groupCaptions, llmResult)) {
+        groupMatchedIndexes = llmResult
+      }
+    } catch (error) {
+      console.warn("[llm] 이미지-문단 LLM 매칭 실패 - 결정론적 폴백 사용", error)
+    }
+
+    // 2차(폴백): LLM 매칭이 없거나 신뢰할 수 없으면, courseStage 순서를 강제하는
+    // 결정론적 매칭(키워드 겹침 + 순서 보존)으로 채운다(위 imageMatching.ts의
+    // matchImagesMonotonicByStage 설명 참고).
+    if (!groupMatchedIndexes) {
+      groupMatchedIndexes = matchImagesMonotonicByStage(
+        groupCaptions.map(({ caption, courseStage }) => ({ caption, courseStage })),
+        candidateParagraphs
+      )
+    }
 
     const middlePicker = createSpacedGapPicker(
       middleCandidates.length > 0 ? middleCandidates : candidates
     )
-    // matchImagesToParagraphs는 자체 used Set으로 그룹끼리는 겹치지 않게 보장하지만,
-    // middlePicker는 별도의 사용량 카운터를 쓰기 때문에 실제 키워드 매칭으로 이미 배정된
-    // 문단을 모른다. 이 상태로 매칭 실패한 그룹의 폴백을 middlePicker.pick()에 맡기면,
-    // 이미 실제 매칭으로 사진이 붙은 문단을 "안 쓴 문단"으로 오인해 그 위에 또 쌓아버려
-    // 한 문단에 4장 이상 몰리고 정작 다른 중반부 문단(특히 마무리 직전 구간)은 계속
-    // 비어있는 사고가 실측 확인됐다(사용자 신고: "마지막에 글 비중이 너무 높다"). 매칭이
-    // 이미 정한 문단을 먼저 사용 처리해두면, 폴백 픽은 자연히 아직 안 쓰인 다른 문단으로
-    // 흩어진다.
+    // 위 두 매칭 함수 모두 candidateParagraphs 안에서 자체적으로 겹치지 않게 보장하지만,
+    // middlePicker는 별도의 사용량 카운터를 쓰기 때문에 실제 매칭으로 이미 배정된 문단을
+    // 모른다. 이 상태로 매칭 실패한 그룹의 폴백을 middlePicker.pick()에 맡기면, 이미
+    // 매칭으로 사진이 붙은 문단을 "안 쓴 문단"으로 오인해 그 위에 또 쌓아버려 한 문단에
+    // 여러 장이 몰리고 정작 다른 문단은 계속 비어있는 사고가 실측 확인됐다. 매칭이 이미
+    // 정한 문단을 먼저 사용 처리해두면, 폴백 픽은 자연히 아직 안 쓰인 다른 문단으로 흩어진다.
     const decidedParagraphOf: (number | undefined)[] = groupMatchedIndexes.map((v) => v ?? undefined)
     decidedParagraphOf.forEach((paragraphIndex) => {
       if (paragraphIndex !== undefined) middlePicker.markUsed(paragraphIndex)
